@@ -1,15 +1,20 @@
 # AnyParser: MinerU PDF Parser Service
 
-AnyParser is a high-performance FastAPI wrapper for the **MinerU Python SDK**. it allows for local execution of PDF parsing with remote inference via a VLLM server, providing a scalable way to convert PDFs into high-quality Markdown and extracted assets.
+AnyParser is a high-performance FastAPI wrapper for the **MinerU Python SDK**. It allows for local execution of PDF parsing with remote inference via a VLLM server, providing a scalable way to convert PDFs into high-quality Markdown and extracted assets.
 
 ## Features
 
 - **MinerU SDK Integration**: Uses the official MinerU SDK in `vlm-http-client` mode.
-- **Asynchronous Processing**: Fully async implementation compatible with FastAPI's event loop.
+- **VLM Image Enrichment**: Automatically identifies empty image tags in the generated Markdown and enriches them using a Visual Language Model (VLM).
+    - **Alt-Text Generation**: Fills image brackets with descriptive 10-word technical alt-text.
+    - **Contextual Description**: Appends a blockquote with a detailed technical description for RAG systems.
+    - **Smart Context**: Extracts 500 characters of surrounding text to provide the VLM with document context.
+- **Asynchronous Processing**: Fully async implementation with parallel image processing (Semaphore limit=5).
 - **OpenAI-Compatible Backend**: Connects to VLLM Inference Servers (e.g., `MinerU-2.5`).
-- **Automatic Packaging**: Generates a `.tar.gz` archive containing Markdown, images, and layout JSONs.
+- **Robust Error Handling**: Includes retry logic (3 retries, 2s delay) for `429 (Rate Limit)` errors and malformed JSON parsing using `json_repair`.
+- **Automatic Packaging**: Generates a `.tar.gz` archive containing enriched Markdown, images, and layout JSONs.
 - **Background Cleanup**: Automatically removes temporary files and output directories after the request is completed.
-- **Modern Config**: Managed via Pydantic Settings and `.env` files.
+- **Docker Support**: Ready-to-use Docker and Docker Compose configurations.
 
 ## Project Structure
 
@@ -23,8 +28,12 @@ AnyParser is a high-performance FastAPI wrapper for the **MinerU Python SDK**. i
 │   ├── core/                # Configuration and constants
 │   │   └── config.py        # Environment variable management
 │   ├── services/            # Business Logic
-│   │   └── mineru_client.py # MinerU SDK integration logic
+│   │   ├── mineru_client.py # MinerU SDK integration logic
+│   │   ├── vlm_client.py    # VLM API client with retry logic
+│   │   └── vlm_enrichment_service.py # Markdown enrichment logic
 │   └── utils/               # Helper functions (archive, file handling)
+├── docker/                  # Dockerfile and docker-compose.yaml
+├── logs/                    # Application and service logs
 ├── tests/                   # Pytest suite
 ├── .env                     # Local environment configuration
 ├── pyproject.toml           # Project setup and dependencies
@@ -58,27 +67,35 @@ AnyParser is a high-performance FastAPI wrapper for the **MinerU Python SDK**. i
    ```
 
 2. **Configure your environment**:
-   Edit the `.env` file and set your VLLM endpoint and other configuration options:
+   Edit the `.env` file and set your VLLM and Enrichment VLM endpoints:
 
    ```env
+   # MinerU VLLM Config
    VLLM_ENDPOINT=http://172.20.0.10:8000/v1
    VLLM_MODEL_ID=MinerU-2.5
+
+   # Enrichment VLM Config
+   VLM_HOST_PATH=http://172.20.0.10:8000/v1
+   VLM_MODEL_NAME=MinerU-2.5
+   VLM_API_KEY=your_api_key_here
+
    TEMP_DIR=temp
    LOGS_DIR=logs
    ```
 
 ## Running the Service
 
-You can run the service using `uvicorn` or directly via Python:
-
+### Using Docker (Recommended)
+Build and start the service using Docker Compose:
 ```bash
-# Using uvicorn
-uvicorn app.main:app --host 0.0.0.0 --port 8080 --reload
-
-# Or directly
-python app/main.py
+docker-compose -f docker/docker-compose.yaml up --build
 ```
 
+### Local Execution
+Run the service using `uvicorn`:
+```bash
+uvicorn app.main:app --host 0.0.0.0 --port 8080 --reload
+```
 The service will be available at `http://localhost:8080`.
 
 ## API Usage
@@ -86,12 +103,15 @@ The service will be available at `http://localhost:8080`.
 ### Parse PDF
 **POST** `/v1/pdf/parse`
 
-Accepts a binary PDF file and returns a `.tar.gz` archive of the results.
+Accepts a binary PDF file. The service will:
+1. Parse the PDF using MinerU.
+2. Enrich the generated Markdown images using the VLM.
+3. Return a `.tar.gz` archive of the results.
 
 **Example with curl**:
 ```bash
-curl -X POST http://localhost:8080/v1/pdf/parse 
-  -F "file=@/path/to/your/document.pdf" 
+curl -X POST http://localhost:8080/v1/pdf/parse \
+  -F "file=@/path/to/your/document.pdf" \
   --output results.tar.gz
 ```
 
@@ -100,33 +120,20 @@ curl -X POST http://localhost:8080/v1/pdf/parse
 
 Manually triggers a cleanup of the entire `temp/` directory.
 
-**Example with curl**:
-```bash
-curl -X POST http://localhost:8080/v1/system/cleanup
-```
-
 ### Health Check
 **GET** `/health`
 
-Returns the status of the service.
-
-## Automatic Cleanup
-
-- **Job Cleanup**: Each parsing job's temporary files are cleaned up via a background task immediately after the response is sent.
-- **Daily Maintenance**: A background task runs every 24 hours to ensure the `temp/` directory remains clean from any orphaned files.
 ## Testing
 
-Run the full test suite using `pytest`:
+Run the enrichment-specific tests:
+```bash
+$env:PYTHONPATH="."; .\.venv\Scripts\python.exe -m pytest tests/test_enrichment.py
+```
 
+Run the full test suite:
 ```bash
 pytest
 ```
-
-The tests cover:
-- VLLM server connectivity.
-- End-to-end PDF to Markdown integration.
-- Archive creation and file utility logic.
-- API endpoint validation.
 
 ## License
 
