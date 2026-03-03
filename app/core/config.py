@@ -1,0 +1,35 @@
+import os
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+class Settings(BaseSettings):
+    # Remote Backend Config
+    REMOTE_HOST: str = "172.20.0.10"
+    REMOTE_PORT: int = 22
+    REMOTE_USER: str = "root"
+    REMOTE_KEY_PATH: str = "keys/id_rsa"
+    REMOTE_MINERU_DIR: str = "/home/demo/docker/mineru"
+    
+    # VLLM Config
+    VLLM_ENDPOINT: str = "http://172.20.0.10:8000/v1"
+    VLLM_MODEL_ID: str = "MinerU-2.5"
+    
+    # MinerU SDK Env Vars (can be overridden in .env)
+    MINERU_VL_MODEL_NAME: str | None = None
+    MINERU_VL_SERVER: str | None = None
+
+    def setup_mineru_env(self):
+        """ ensure MinerU environment variables are set for the SDK """
+        import os
+        if not os.environ.get("MINERU_VL_MODEL_NAME"):
+            os.environ["MINERU_VL_MODEL_NAME"] = self.MINERU_VL_MODEL_NAME or self.VLLM_MODEL_ID
+        if not os.environ.get("MINERU_VL_SERVER"):
+            os.environ["MINERU_VL_SERVER"] = self.MINERU_VL_SERVER or self.VLLM_ENDPOINT
+
+    # Local Config
+    TEMP_DIR: str = "temp"
+    LOGS_DIR: str = "logs"
+    ENABLE_DAILY_CLEANUP: bool = True
+    
+    model_config = SettingsConfigDict(env_file=".env")
+
+settings = Settings()
