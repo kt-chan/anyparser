@@ -2,15 +2,18 @@ from fastapi import APIRouter, UploadFile, File, HTTPException, BackgroundTasks
 from fastapi.responses import FileResponse
 from mineru.cli.common import aio_do_parse, read_fn
 from app.services.mineru_client import MinerUWrapper
+from app.services.vlm_enrichment_service import VLMEnrichmentService
 from app.utils.file_handler import save_upload_file, cleanup_file
 from app.utils.archive import compress_folder
 from loguru import logger
 from pathlib import Path
 import shutil
 import os
+import asyncio
 
 router = APIRouter()
 mineru_client = MinerUWrapper()
+vlm_enrichment_service = VLMEnrichmentService()
 
 def cleanup_job_files(paths: list[Path]):
     """Background task to cleanup temporary files and directories."""
@@ -43,6 +46,13 @@ async def parse_pdf(background_tasks: BackgroundTasks, file: UploadFile = File(.
     try:
         # Process the PDF using MinerU SDK (Asynchronously)
         output_dir = await mineru_client.process_pdf(local_pdf_path)
+        
+        # Enrich the generated Markdown files with VLM analysis
+        md_files = list(output_dir.rglob("*.md"))
+        if md_files:
+            logger.info(f"Enriching {len(md_files)} markdown files in {output_dir}")
+            enrichment_tasks = [vlm_enrichment_service.enrich_markdown(md_file) for md_file in md_files]
+            await asyncio.gather(*enrichment_tasks)
         
         # Tar the results
         tar_name = f"{local_pdf_path.stem}_results.tar.gz"

@@ -13,6 +13,11 @@ class Settings(BaseSettings):
     VLLM_ENDPOINT: str = "http://172.20.0.10:8000/v1"
     VLLM_MODEL_ID: str = "MinerU-2.5"
     
+    # Enrichment VLM Config
+    VLM_HOST_PATH: str = "http://172.20.0.10:8000/v1"
+    VLM_MODEL_NAME: str = "MinerU-2.5"
+    VLM_API_KEY: str = "EMPTY"
+    
     # MinerU SDK Env Vars (can be overridden in .env)
     MINERU_VL_MODEL_NAME: str | None = None
     MINERU_VL_SERVER: str | None = None
