@@ -1,0 +1,20 @@
+services:
+  anyparser:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    container_name: anyparser_service
+    ports:
+      - "8080:8080"
+    env_file:
+      - ../.env
+    volumes:
+      - ../logs:/app/logs
+      - ../temp:/app/temp
+    restart: unless-stopped
+    networks:
+      - anyparser_network
+
+networks:
+  anyparser_network:
+    driver: bridge
