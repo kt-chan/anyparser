@@ -118,20 +118,11 @@ Write the following tests in `/tests/test_enrichment.py`:
 * `test_vlm_json_parsing`: Verify the logic correctly handles and retries if the VLM returns non-JSON text.
 * `test_markdown_integrity`: Ensure the final `.md` file structure is valid and the context block is correctly placed.
 
-### 5. Reference Environment
+### 5. Reference Environment and Constrains
 
 * **VLM Endpoint:**  scan environment variables (VLM_HOST_PATH, VLM_MODEL_NAME, and VLM_API_KEY) in project root directory .env files.
 * **Local Env:** Windows (PowerShell), Python 3.10+.
-
----
-
-## Pro-Tip for the AI Coder
-
-> "When replacing the image tags, ensure you do not use simple `str.replace()`. Use `re.sub()` with a callback function or iterate through matches to ensure that if the same image is used twice, both instances are handled correctly without recursive errors."
-
-## Project Structure (Modular)
-
-Implement the project using this strict directory hierarchy to ensure maintainability:
+* **Project Structure (Modular)**: Implement the project using this strict directory hierarchy to ensure maintainability:
 
 ```text
 /mineru-service
@@ -162,3 +153,111 @@ Implement the project using this strict directory hierarchy to ensure maintainab
                 # Workspace for PDF processing
 
 ```
+
+
+### Task 3
+
+**Role:** You are Senior AI Engineer specializing in Large-Language Models (LLM) and Vision-Language Models (VLM) and Document Processing.
+
+**Task:** Refactor the Markdown enrichment service to implement a **Recursive Semantic Tree**. The service must not only map the document structure but also perform multi-level summarization using an LLM to provide "Global-to-Local" context for image analysis.
+
+### Prework
+1. scan @app to understand the current logics
+2. scan @app\services\vlm_enrichment_service.py, and analyze enrich_markdown function current implementation
+3. scan @.env for environment variable and related llm and vlm service setup and credentials
+
+### 1. The Semantic Tree Structure (`app/utils/markdown_parser.py`)
+
+Implement a `SemanticSection` class. Each node in the tree must represent a Markdown heading and contain:
+
+* **Structural Metadata:** Level, title, start/end indices, and child sections.
+* **Content Inventory:** Count of images, tables, and code blocks within *this specific* section.
+* **Recursive Summaries:**
+* `self.own_summary`: A brief summary of the text strictly within this section.
+* `self.context_summary`: A synthesized summary including its own content + its children’s content.
+
+
+* **Root Level:** The root of the tree represents the entire document and holds the `document_summary`.
+
+### 2. Multi-Stage Enrichment Pipeline
+
+The service must follow this execution order:
+
+#### Stage A: Structural Parsing
+
+Use a Markdown AST parser to build the tree. Ensure that text, images, and tables are correctly assigned to their parent `SemanticSection`.
+
+#### Stage B: Bottom-Up Summarization (LLM)
+
+1. **Leaf Summaries:** Start at the lowest sub-sections. Use the LLM to generate a summary of the raw text with up to 5 sentences or within 100 words.
+2. **Section Summaries:** Moving up the tree, generate summaries for parent sections by providing the LLM with the section's text and the summaries of its children, with up to 5 sentences or within 100 words.
+3. **Document Summary:** The final root node summary representing the high-level purpose of the file, with up to 5 sentences or within 100 words.
+
+#### Stage C: Context-Aware VLM Enrichment
+
+When an image is encountered, the `enrich_markdown` service must construct a VLM prompt using the following "Context Stack":
+
+1. **Global Context:** The `document_summary`.
+2. **Structural Path:** The titles of all parent headings (e.g., *Analysis > Results > Figure 4*).
+3. **Local Context:** The `own_summary` of the current section and the immediate preceding paragraph.
+
+### 3. VLM Prompt Template Requirements
+
+The prompt sent to the VLM should follow this structure:
+
+> **Document Purpose:** {document_summary}
+> **Document Catalog:** {heading_path}
+> **Section Summary:** {section_summary}
+> **Immediate Text:** {surrounding_500_chars}
+> **Task:** Analyze the image and provide a descriptive alt-text and a detailed contextual description that explains how this image supports the section summary above.
+
+### 4. Technical Constraints & Refactoring
+
+* **LLM:** Take reference on `vlm_client` at @app\services\vlm_client.py and develop a llm_client to handle both the summarization (text-only)
+* **VLM:** enrichment `vlm_client` at @app\services\vlm_client.py (vision model) to take the updated **VLM Prompt Template** as input to provide detailed contextual information to generate image description
+* **Caching:** Implement a simple hash-based cache for section summaries to avoid redundant LLM calls if the content hasn't changed.
+* **Parallelism:** Enhanced the rate limited implementation, to Use `asyncio.Semaphore` to limit concurrent LLM/VLM calls to prevent rate-limiting on your remote host.
+* **Environment:** Use `VLM_MODEL_NAME` and `LLM_MODEL_NAME` are distinct variables in `.env` to allow using a cheaper model for summarization and a stronger VLM for vision.
+
+### 5. Reference Environment and Constrains
+
+* **VLM Endpoint:**  scan environment variables (VLM_HOST_PATH, VLM_MODEL_NAME, and VLM_API_KEY) in project root directory .env files.
+* **LLM Endpoint:**  scan environment variables (LLM_HOST_PATH, LLM_MODEL_NAME, and LLM_API_KEY) in project root directory .env files.
+* **Local Env:** Windows (PowerShell), Python 3.10+.
+* **Project Structure (Modular)**: Implement the project using this strict directory hierarchy to ensure maintainability:
+
+```text
+/mineru-service
+├── app/
+│   ├── __init__.py
+│   ├── main.py              # FastAPI app initialization & exception handlers
+│   ├── api/                 # Endpoint definitions
+│   │   └── v1/
+│   │       └── parse.py     # OpenAI-compatible PDF upload routes
+│   ├── core/                # Configuration and global constants
+│   │   └── config.py        # SSH paths, VLLM endpoints, & Env vars
+│   ├── services/            # Business Logic (The "Brain")
+│   │   ├── mineru_client.py # MinerU SDK integration & VLM-HTTP logic
+│   │   └── ssh_manager.py   # Paramiko wrapper for remote host commands
+│   └── utils/               # Helper functions
+│       ├── archive.py       # Tar/Zip compression logic
+│       └── file_handler.py  # Local temp file management
+├── keys/
+│   └── id_rsa               # SSH Private Key (Mount/Copy here)
+├── logs/                    # Application and SDK log files
+├── tests/                   # Pytest suite
+│   ├── conftest.py          # Shared fixtures (e.g., mock SSH)
+│   ├── test_api.py          # Endpoint integration tests
+│   └── test_mineru.py       # Logic unit tests
+├── temp/                    # Workspace for PDF processing
+├── pyproject.toml           # Modern dependency management (uv)
+└── Dockerfile               # Client-side deployment
+                # Workspace for PDF processing
+
+```
+
+### Task 3
+
+1. Given there are small text sentence of the subsection, there are too many api call on llm at _enrich_sections_recursive of @app\services\enrichment_service.py, you should add subsection merge logic to group subsection into a large text chunks, so that we can reduce the number of api call. add a content_batch_size parameter default to 2000 tokens, and update related logic.
+
+2. Parallell the llm summarization api call according to the SemanticSection and its self.children: List['SemanticSection'] properties, make sure you keep the dependencies for aggregrating the subsection summaries.

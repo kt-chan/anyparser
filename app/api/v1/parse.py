@@ -2,7 +2,7 @@ from fastapi import APIRouter, UploadFile, File, HTTPException, BackgroundTasks
 from fastapi.responses import FileResponse
 from mineru.cli.common import aio_do_parse, read_fn
 from app.services.mineru_client import MinerUWrapper
-from app.services.vlm_enrichment_service import VLMEnrichmentService
+from app.services.enrichment_service import VLMEnrichmentService
 from app.utils.file_handler import save_upload_file, cleanup_file
 from app.utils.archive import compress_folder
 from loguru import logger

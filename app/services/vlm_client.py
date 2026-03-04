@@ -16,11 +16,16 @@ class VLMClient:
         self.max_retries = 3
         self.retry_delay = 2  # seconds
 
-    async def analyze_image(self, image_path: Path, context_text: str) -> dict:
+    async def analyze_image(
+        self, 
+        image_path: Path, 
+        document_summary: str,
+        heading_path: str,
+        section_summary: str,
+        surrounding_text: str
+    ) -> dict:
         """
-        Analyzes an image using the VLM with surrounding text context.
-        Returns a dict with 'title' and 'analysis'.
-        Includes retry logic for RateLimitError (429).
+        Analyzes an image using the VLM with recursive context stack.
         """
         if not image_path.exists():
             raise FileNotFoundError(f"Image not found at {image_path}")
@@ -29,12 +34,21 @@ class VLMClient:
             base64_image = base64.b64encode(image_file.read()).decode("utf-8")
 
         system_prompt = (
-            "You are a document analysis assistant. Analyze the provided image based on the surrounding text context. "
+            "You are a document analysis assistant. Analyze the provided image based on its global and local document context. "
             "Return a JSON object with two fields: 'title' (a 10-word technical alt-text) and 'analysis' "
-            "(a detailed technical description of the image content for a RAG system)."
+            "(a detailed technical description explaining how the image supports the document context)."
         )
 
-        user_prompt = f"Surrounding context from the document:\n{context_text}"
+        # Updated VLM Prompt Template per requirements
+        user_prompt = (
+            f"**Document Purpose:** {document_summary}\n"
+            f"**Document Catalog:** {heading_path}\n"
+            f"**Section Summary:** {section_summary}\n"
+            f"**Immediate Text:** {surrounding_text[:500]}\n\n"
+            "**Task:** Analyze the image and provide a descriptive alt-text and a detailed contextual description "
+            "that explains how this image supports the section summary above."
+        )
+        
         messages_content = [
             {"role": "system", "content": system_prompt},
             {
@@ -49,9 +63,10 @@ class VLMClient:
             },
         ]
 
-        logger.info(
-            f"Sending Open API Request with system_prompt: {system_prompt[:500]}, user_prompt: {user_prompt[:500]}"
-        )
+        logger.info(f"VLM Request - Model: {self.model} for {image_path.name}")
+        logger.info(f"VLM System Prompt: {system_prompt}")
+        logger.info(f"VLM User Prompt: {user_prompt}")
+        # Note: image binary (base64) is excluded from log for brevity and security
 
         for attempt in range(self.max_retries + 1):
             try:
@@ -61,7 +76,6 @@ class VLMClient:
 
                 content = response.choices[0].message.content
                 try:
-                    # Use json_repair to handle potential non-JSON or malformed JSON responses
                     result = json_repair.loads(content)
                     if (
                         isinstance(result, dict)
@@ -83,12 +97,11 @@ class VLMClient:
             except RateLimitError as e:
                 if attempt < self.max_retries:
                     logger.warning(
-                        f"Rate limit (429) hit for {image_path}. Attempt {attempt + 1}/{self.max_retries}. Retrying in {self.retry_delay}s..."
+                        f"Rate limit hit for {image_path}. Retrying in {self.retry_delay}s..."
                     )
                     await asyncio.sleep(self.retry_delay)
                     continue
                 else:
-                    logger.error(f"Max retries reached for 429 error on {image_path}")
                     raise e
             except Exception as e:
                 logger.error(f"VLM analysis failed for {image_path}: {e}")

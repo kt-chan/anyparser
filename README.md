@@ -30,7 +30,7 @@ AnyParser is a high-performance FastAPI wrapper for the **MinerU Python SDK**. I
 │   ├── services/            # Business Logic
 │   │   ├── mineru_client.py # MinerU SDK integration logic
 │   │   ├── vlm_client.py    # VLM API client with retry logic
-│   │   └── vlm_enrichment_service.py # Markdown enrichment logic
+│   │   └── enrichment_service.py # Markdown enrichment logic
 │   └── utils/               # Helper functions (archive, file handling)
 ├── docker/                  # Dockerfile and docker-compose.yaml
 ├── logs/                    # Application and service logs

@@ -18,6 +18,11 @@ class Settings(BaseSettings):
     VLM_MODEL_NAME: str = "MinerU-2.5"
     VLM_API_KEY: str = "EMPTY"
     
+    # Enrichment LLM Config
+    LLM_HOST_PATH: str = "http://172.20.0.10:8000/v1"
+    LLM_MODEL_NAME: str = "Qwen2.5-7B-Instruct"
+    LLM_API_KEY: str = "EMPTY"
+    
     # MinerU SDK Env Vars (can be overridden in .env)
     MINERU_VL_MODEL_NAME: str | None = None
     MINERU_VL_SERVER: str | None = None

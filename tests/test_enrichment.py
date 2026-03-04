@@ -4,15 +4,17 @@ import json
 import asyncio
 from pathlib import Path
 from unittest.mock import AsyncMock, patch, MagicMock
-from app.services.vlm_enrichment_service import VLMEnrichmentService
+from app.services.enrichment_service import VLMEnrichmentService
 from app.services.vlm_client import VLMClient
+from app.services.llm_client import LLMClient
 from openai import RateLimitError
 import json_repair
 
 @pytest.fixture
 def enrichment_service():
     with patch("app.services.vlm_client.AsyncOpenAI"):
-        return VLMEnrichmentService()
+        with patch("app.services.llm_client.AsyncOpenAI"):
+            return VLMEnrichmentService()
 
 def test_regex_extraction(enrichment_service):
     content = "Some text ![](images/img1.jpg) and more text ![](images/img2.png)"
@@ -22,19 +24,20 @@ def test_regex_extraction(enrichment_service):
     assert matches[1].group(1) == "images/img2.png"
 
 def test_context_window(enrichment_service):
-    prefix = "A" * 600
-    suffix = "B" * 600
+    # Requirement: 500 characters (250 before, 250 after)
+    prefix = "A" * 300
+    suffix = "B" * 300
     content = f"{prefix}![](images/img1.jpg){suffix}"
     
     match = next(enrichment_service.image_pattern.finditer(content))
-    start_ctx = max(0, match.start() - 500)
-    end_ctx = min(len(content), match.end() + 500)
+    # In VLMEnrichmentService, we use 250 before and 250 after
+    start_ctx = max(0, match.start() - 250)
+    end_ctx = min(len(content), match.end() + 250)
     context = content[start_ctx:end_ctx]
     
-    # Context should be 500 before + tag length + 500 after
-    assert len(context) == 500 + len(match.group(0)) + 500
-    assert context.startswith("A" * 500)
-    assert context.endswith("B" * 500)
+    assert len(context) == 250 + len(match.group(0)) + 250
+    assert context.startswith("A" * 250)
+    assert context.endswith("B" * 250)
 
 def test_vlm_json_parsing_logic():
     # Test how we handle various VLM outputs using json_repair
@@ -54,7 +57,8 @@ def test_vlm_json_parsing_logic():
 @pytest.mark.asyncio
 async def test_markdown_integrity(tmp_path):
     with patch("app.services.vlm_client.AsyncOpenAI"):
-        service = VLMEnrichmentService()
+        with patch("app.services.llm_client.AsyncOpenAI"):
+            service = VLMEnrichmentService()
     
     md_file = tmp_path / "test.md"
     img_dir = tmp_path / "images"
@@ -62,13 +66,15 @@ async def test_markdown_integrity(tmp_path):
     img_file = img_dir / "test.jpg"
     img_file.write_bytes(b"fake image data")
     
-    content = "Intro\n\n![](images/test.jpg)\n\nOutro"
+    content = "# Title\n\nIntro\n\n![](images/test.jpg)\n\nOutro"
     md_file.write_text(content)
     
     mock_result = {"title": "A technical title", "analysis": "Detailed analysis."}
     
-    with patch.object(service.client, 'analyze_image', return_value=mock_result):
-        await service.enrich_markdown(md_file)
+    # Mock LLM and VLM calls
+    with patch.object(service.llm_client, 'summarize', return_value="Summary"):
+        with patch.object(service.vlm_client, 'analyze_image', return_value=mock_result):
+            await service.enrich_markdown(md_file)
     
     enriched_content = md_file.read_text()
     assert "![A technical title](images/test.jpg)" in enriched_content
@@ -79,7 +85,8 @@ async def test_markdown_integrity(tmp_path):
 @pytest.mark.asyncio
 async def test_multiple_images_same_path(tmp_path):
     with patch("app.services.vlm_client.AsyncOpenAI"):
-        service = VLMEnrichmentService()
+        with patch("app.services.llm_client.AsyncOpenAI"):
+            service = VLMEnrichmentService()
     
     md_file = tmp_path / "test.md"
     img_dir = tmp_path / "images"
@@ -88,17 +95,17 @@ async def test_multiple_images_same_path(tmp_path):
     img_file.write_bytes(b"fake image data")
     
     # Two identical tags at different positions
-    content = "Context 1\n\n![](images/test.jpg)\n\nContext 2\n\n![](images/test.jpg)"
+    content = "# Section\n\nContext 1\n\n![](images/test.jpg)\n\nContext 2\n\n![](images/test.jpg)"
     md_file.write_text(content)
     
-    # We'll return different results for each call to verify they are handled independently
     mock_results = [
         {"title": "Title 1", "analysis": "Analysis 1"},
         {"title": "Title 2", "analysis": "Analysis 2"}
     ]
     
-    with patch.object(service.client, 'analyze_image', side_effect=mock_results):
-        await service.enrich_markdown(md_file)
+    with patch.object(service.llm_client, 'summarize', return_value="Summary"):
+        with patch.object(service.vlm_client, 'analyze_image', side_effect=mock_results):
+            await service.enrich_markdown(md_file)
     
     enriched_content = md_file.read_text()
     assert "![Title 1](images/test.jpg)" in enriched_content
@@ -109,15 +116,12 @@ async def test_multiple_images_same_path(tmp_path):
 @pytest.mark.asyncio
 async def test_vlm_retry_on_429(tmp_path):
     with patch("app.services.vlm_client.AsyncOpenAI") as mock_openai:
-        # Configure mock client
         mock_client = mock_openai.return_value
         
-        # Mock create to fail then succeed
         mock_response = MagicMock()
         mock_response.choices = [MagicMock()]
         mock_response.choices[0].message.content = '{"title": "Retry Success", "analysis": "Success after 429"}'
         
-        # Setup side effect: 2 failures followed by 1 success
         mock_client.chat.completions.create = AsyncMock(side_effect=[
             RateLimitError("Rate limit exceeded", response=MagicMock(), body={}),
             RateLimitError("Rate limit exceeded", response=MagicMock(), body={}),
@@ -125,12 +129,18 @@ async def test_vlm_retry_on_429(tmp_path):
         ])
         
         client = VLMClient()
-        client.retry_delay = 0.1 # Fast test
+        client.retry_delay = 0.1
         
         img_file = tmp_path / "test.jpg"
         img_file.write_bytes(b"data")
         
-        result = await client.analyze_image(img_file, "context")
+        result = await client.analyze_image(
+            img_file, 
+            "doc_summary", 
+            "heading_path", 
+            "section_summary", 
+            "surrounding_text"
+        )
         
         assert result["title"] == "Retry Success"
         assert mock_client.chat.completions.create.call_count == 3
