@@ -13,5 +13,5 @@ def sample_pdf():
     return pdf_path
 
 @pytest.fixture
-def vllm_endpoint():
-    return settings.VLLM_ENDPOINT
+def MINERU_VLLM_ENDPOINT():
+    return settings.MINERU_VLLM_ENDPOINT

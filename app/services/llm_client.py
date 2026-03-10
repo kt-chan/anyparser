@@ -5,6 +5,9 @@ from app.core.config import settings
 from loguru import logger
 
 class LLMClient:
+    _semaphore = asyncio.Semaphore(5)  # Class-level semaphore for all instances
+    _cache = {} # Class-level cache for all instances
+
     def __init__(self):
         self.client = AsyncOpenAI(
             api_key=settings.LLM_API_KEY, base_url=settings.LLM_HOST_PATH
@@ -12,7 +15,6 @@ class LLMClient:
         self.model = settings.LLM_MODEL_NAME
         self.max_retries = 3
         self.retry_delay = 2
-        self.cache = {}
 
     def _get_cache_key(self, text: str) -> str:
         return hashlib.sha256(text.encode("utf-8")).hexdigest()
@@ -25,8 +27,9 @@ class LLMClient:
             return ""
 
         cache_key = self._get_cache_key(text + context_summaries)
-        if cache_key in self.cache:
-            return self.cache[cache_key]
+        if cache_key in self._cache:
+            logger.debug("LLM cache hit")
+            return self._cache[cache_key]
 
         system_prompt = "You are a document summarization assistant. Summarize the provided text concisely (up to 5 sentences or 100 words)."
         
@@ -34,25 +37,24 @@ class LLMClient:
         if context_summaries:
             user_prompt += f"\n\nContext (summaries of sub-sections):\n{context_summaries}"
 
-        logger.info(f"LLM Request - Model: {self.model}")
-        logger.info(f"LLM System Prompt: {system_prompt}")
-        logger.info(f"LLM User Prompt: {user_prompt}")
-
         for attempt in range(self.max_retries + 1):
             try:
-                response = await self.client.chat.completions.create(
-                    model=self.model,
-                    messages=[
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": user_prompt}
-                    ],
-                    temperature=0.3
-                )
+                async with self._semaphore:
+                    logger.info(f"LLM Request - Model: {self.model}")
+                    response = await self.client.chat.completions.create(
+                        model=self.model,
+                        messages=[
+                            {"role": "system", "content": system_prompt},
+                            {"role": "user", "content": user_prompt}
+                        ],
+                        temperature=0.3
+                    )
                 summary = response.choices[0].message.content.strip()
-                self.cache[cache_key] = summary
+                self._cache[cache_key] = summary
                 return summary
             except RateLimitError as e:
                 if attempt < self.max_retries:
+                    logger.warning(f"LLM Rate limit hit, retrying in {self.retry_delay}s...")
                     await asyncio.sleep(self.retry_delay)
                     continue
                 raise e

@@ -261,3 +261,60 @@ The prompt sent to the VLM should follow this structure:
 1. Given there are small text sentence of the subsection, there are too many api call on llm at _enrich_sections_recursive of @app\services\enrichment_service.py, you should add subsection merge logic to group subsection into a large text chunks, so that we can reduce the number of api call. add a content_batch_size parameter default to 2000 tokens, and update related logic.
 
 2. Parallell the llm summarization api call according to the SemanticSection and its self.children: List['SemanticSection'] properties, make sure you keep the dependencies for aggregrating the subsection summaries.
+
+
+### Task 4
+You are an expert Python developer tasked with creating a remote MCP (Model Context Protocol) server that uses SSE (Server-Sent Events) transport. 
+
+### Task Objective
+The server will wrap the MinerU PDF parsing engine into an MCP tool that provides smart chunking functionality: given a PDF file (as Base64), it returns multi-modal chunks (text blocks + image blocks).
+
+### Prework
+1. scan @app to understand the current logics
+2. scan @app\services\enrichment_service.py, and analyze enrich_markdown function current implementation
+3. scan @.env for environment variable and related llm and vlm service setup and credentials
+
+### Technical Constraints & Refactoring
+
+* **LLM:** Take reference on `vlm_client` at @app\services\vlm_client.py and develop a llm_client to handle both the summarization (text-only)
+* **VLM:** enrichment `vlm_client` at @app\services\vlm_client.py (vision model) to take the updated **VLM Prompt Template** as input to provide detailed contextual information to generate image description
+* **Caching:** Implement a simple hash-based cache for section summaries to avoid redundant LLM calls if the content hasn't changed.
+* **Parallelism:** Enhanced the rate limited implementation, to Use `asyncio.Semaphore` to limit concurrent LLM/VLM calls to prevent rate-limiting on your remote host.
+* **Environment:** Use `VLM_MODEL_NAME` and `LLM_MODEL_NAME` are distinct variables in `.env` to allow using a cheaper model for summarization and a stronger VLM for vision.
+
+### Reference Environment and Constrains
+
+* **VLM Endpoint:**  scan environment variables (VLM_HOST_PATH, VLM_MODEL_NAME, and VLM_API_KEY) in project root directory .env files.
+* **LLM Endpoint:**  scan environment variables (LLM_HOST_PATH, LLM_MODEL_NAME, and LLM_API_KEY) in project root directory .env files.
+* **Local Env:** Windows (PowerShell), Python 3.10+, python interpreter at @.venv\Scripts\python.exe
+* **Project Structure (Modular)**: Implement the project using this strict directory hierarchy to ensure maintainability:
+
+```text
+/anyparser
+├── app/
+│   ├── __init__.py
+│   ├── main.py              # FastAPI app initialization & exception handlers
+│   ├── api/                 # Endpoint definitions
+│   │   └── v1/
+│   │       └── parse.py     # OpenAI-compatible PDF upload routes
+│   ├── core/                # Configuration and global constants
+│   │   └── config.py        # SSH paths, VLLM endpoints, & Env vars
+│   ├── services/            # Business Logic (The "Brain")
+│   │   ├── mineru_client.py # MinerU SDK integration & VLM-HTTP logic
+│   │   └── ssh_manager.py   # Paramiko wrapper for remote host commands
+│   └── utils/               # Helper functions
+│       ├── archive.py       # Tar/Zip compression logic
+│       └── file_handler.py  # Local temp file management
+├── keys/
+│   └── id_rsa               # SSH Private Key (Mount/Copy here)
+├── logs/                    # Application and SDK log files
+├── tests/                   # Pytest suite
+│   ├── conftest.py          # Shared fixtures (e.g., mock SSH)
+│   ├── test_api.py          # Endpoint integration tests
+│   └── test_mineru.py       # Logic unit tests
+├── temp/                    # Workspace for PDF processing
+├── pyproject.toml           # Modern dependency management (uv)
+└── Dockerfile               # Client-side deployment
+                # Workspace for PDF processing
+
+```

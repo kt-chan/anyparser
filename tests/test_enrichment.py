@@ -114,6 +114,45 @@ async def test_multiple_images_same_path(tmp_path):
     assert "Analysis 2" in enriched_content
 
 @pytest.mark.asyncio
+async def test_enrichment_without_summarization(tmp_path):
+    """Verify that enrichment works even when LLM summarization is disabled."""
+    with patch("app.services.vlm_client.AsyncOpenAI"):
+        with patch("app.services.llm_client.AsyncOpenAI"):
+            service = VLMEnrichmentService()
+    
+    md_file = tmp_path / "no_sum.md"
+    img_dir = tmp_path / "images"
+    img_dir.mkdir()
+    (img_dir / "test.jpg").write_bytes(b"data")
+    
+    content = "# Section A\nSome text.\n![](images/test.jpg)"
+    md_file.write_text(content)
+    
+    # Mock settings to disable summarization
+    with patch("app.services.enrichment_service.settings") as mock_settings:
+        mock_settings.ENABLE_LLM_SUMMARIZATION = False
+        mock_settings.LOGS_DIR = str(tmp_path / "logs")
+        
+        mock_vlm_result = {"title": "Title", "analysis": "Analysis"}
+        
+        # Mock LLM summarize to ensure it's NOT called
+        with patch.object(service.llm_client, 'summarize', side_effect=Exception("LLM should not be called")):
+            with patch.object(service.vlm_client, 'analyze_image', return_value=mock_vlm_result) as mock_analyze:
+                root = await service.enrich_markdown(md_file)
+                
+                # Verify LLM wasn't called
+                # Verify VLM was called with raw content as section summary
+                mock_analyze.assert_called_once()
+                args, kwargs = mock_analyze.call_args
+                # section_summary should be a snippet of raw content
+                assert "Some text" in kwargs["section_summary"]
+                
+                # Verify enriched content
+                enriched_content = md_file.read_text()
+                assert "![Title](images/test.jpg)" in enriched_content
+                assert "Analysis" in enriched_content
+
+@pytest.mark.asyncio
 async def test_vlm_retry_on_429(tmp_path):
     with patch("app.services.vlm_client.AsyncOpenAI") as mock_openai:
         mock_client = mock_openai.return_value

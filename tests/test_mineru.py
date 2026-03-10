@@ -11,7 +11,7 @@ import shutil
 @pytest.mark.asyncio
 async def test_vllm_connectivity():
     """Verify the local service can reach http://172.20.0.10:8000/v1/models"""
-    endpoint = f"{settings.VLLM_ENDPOINT}/models"
+    endpoint = f"{settings.MINERU_VLLM_ENDPOINT}/models"
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:
             response = await client.get(endpoint)
@@ -21,7 +21,7 @@ async def test_vllm_connectivity():
             assert "data" in models
             # Check if MinerU-2.5 is in the models list
             model_ids = [m["id"] for m in models["data"]]
-            assert settings.VLLM_MODEL_ID in model_ids
+            assert settings.MINERU_VLLM_MODEL_ID in model_ids
     except (httpx.ConnectError, httpx.ConnectTimeout) as e:
         pytest.fail(f"VLLM Inference Server at {endpoint} is unreachable: {e}")
     except Exception as e:

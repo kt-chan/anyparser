@@ -71,8 +71,8 @@ AnyParser is a high-performance FastAPI wrapper for the **MinerU Python SDK**. I
 
    ```env
    # MinerU VLLM Config
-   VLLM_ENDPOINT=http://172.20.0.10:8000/v1
-   VLLM_MODEL_ID=MinerU-2.5
+   MINERU_VLLM_ENDPOINT=http://172.20.0.10:8000/v1
+   MINERU_VLLM_MODEL_ID=MinerU-2.5
 
    # Enrichment VLM Config
    VLM_HOST_PATH=http://172.20.0.10:8000/v1

@@ -1,19 +1,20 @@
 from fastapi import APIRouter, UploadFile, File, HTTPException, BackgroundTasks
 from fastapi.responses import FileResponse
-from mineru.cli.common import aio_do_parse, read_fn
 from app.services.mineru_client import MinerUWrapper
 from app.services.enrichment_service import VLMEnrichmentService
+from app.services.chunking_service import ChunkingService
 from app.utils.file_handler import save_upload_file, cleanup_file
 from app.utils.archive import compress_folder
 from loguru import logger
 from pathlib import Path
 import shutil
-import os
+import base64
 import asyncio
 
 router = APIRouter()
 mineru_client = MinerUWrapper()
 vlm_enrichment_service = VLMEnrichmentService()
+chunking_service = ChunkingService()
 
 def cleanup_job_files(paths: list[Path]):
     """Background task to cleanup temporary files and directories."""
@@ -60,8 +61,6 @@ async def parse_pdf(background_tasks: BackgroundTasks, file: UploadFile = File(.
         compress_folder(output_dir, tar_path)
         
         # Add background cleanup task
-        # We cleanup the uploaded PDF, the output dir, and eventually the tar file
-        # BUT we return the tar file first.
         background_tasks.add_task(cleanup_job_files, [local_pdf_path, output_dir.parent, tar_path])
         
         # Return the tar file as response
@@ -77,4 +76,35 @@ async def parse_pdf(background_tasks: BackgroundTasks, file: UploadFile = File(.
         if output_dir: paths_to_cleanup.append(output_dir.parent)
         if tar_path: paths_to_cleanup.append(tar_path)
         cleanup_job_files(paths_to_cleanup)
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/pdf/chunk")
+async def chunk_pdf(file: UploadFile = File(...)):
+    """
+    Endpoint to parse a PDF file and return multi-modal chunks.
+    Accepts binary PDF upload.
+    Returns a list of multi-modal chunks (text and images with descriptions).
+    """
+    if file.content_type != "application/pdf":
+        raise HTTPException(status_code=400, detail="Only PDF files are supported")
+
+    logger.info(f"Received PDF chunking request: {file.filename}")
+    
+    try:
+        # Read file bytes and encode to base64 for ChunkingService
+        file_bytes = await file.read()
+        pdf_base64 = base64.b64encode(file_bytes).decode("utf-8")
+        
+        # Process chunks
+        chunks = await chunking_service.process_pdf_to_chunks(pdf_base64)
+        
+        # Check for errors in service output
+        if chunks and chunks[0].get("type") == "error":
+             raise HTTPException(status_code=500, detail=chunks[0].get("content"))
+             
+        return chunks
+    except Exception as e:
+        logger.error(f"Error chunking PDF: {e}")
+        if isinstance(e, HTTPException):
+            raise e
         raise HTTPException(status_code=500, detail=str(e))

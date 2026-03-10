@@ -7,7 +7,7 @@ from mineru.cli.common import aio_do_parse, read_fn
 
 class MinerUClient:
     def __init__(self):
-        self.vllm_endpoint = settings.VLLM_ENDPOINT
+        self.MINERU_VLLM_ENDPOINT = settings.MINERU_VLLM_ENDPOINT
         self.temp_dir = Path(settings.TEMP_DIR)
         self.temp_dir.mkdir(exist_ok=True)
 
@@ -34,7 +34,7 @@ class MinerUClient:
                 pdf_bytes_list=[pdf_bytes],
                 p_lang_list=["ch","en"], 
                 backend="vlm-http-client",
-                server_url=self.vllm_endpoint,
+                server_url=self.MINERU_VLLM_ENDPOINT,
                 f_draw_layout_bbox=True,
                 f_draw_span_bbox=True,
                 f_dump_md=True,

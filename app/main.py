@@ -3,7 +3,7 @@ import sys
 import asyncio
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
-from app.api.v1.parse import router as parse_router
+from app.api.v1.process import router as parse_router
 from app.api.v1.system import router as system_router
 from app.core.config import settings
 from app.utils.file_handler import cleanup_temp_dir

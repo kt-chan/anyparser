@@ -8,6 +8,8 @@ import json_repair
 
 
 class VLMClient:
+    _semaphore = asyncio.Semaphore(5)
+
     def __init__(self):
         self.client = AsyncOpenAI(
             api_key=settings.VLM_API_KEY, base_url=settings.VLM_HOST_PATH
@@ -63,16 +65,13 @@ class VLMClient:
             },
         ]
 
-        logger.info(f"VLM Request - Model: {self.model} for {image_path.name}")
-        logger.info(f"VLM System Prompt: {system_prompt}")
-        logger.info(f"VLM User Prompt: {user_prompt}")
-        # Note: image binary (base64) is excluded from log for brevity and security
-
         for attempt in range(self.max_retries + 1):
             try:
-                response = await self.client.chat.completions.create(
-                    model=self.model, messages=messages_content, temperature=0.2
-                )
+                async with self._semaphore:
+                    logger.info(f"VLM Request - Model: {self.model} for {image_path.name}")
+                    response = await self.client.chat.completions.create(
+                        model=self.model, messages=messages_content, temperature=0.2
+                    )
 
                 content = response.choices[0].message.content
                 try:
