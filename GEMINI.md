@@ -5,7 +5,6 @@ You are an expert Backend Architect. This project is a FastAPI-based service for
 ## 🛠 Environment Specification
 - **Framework**: FastAPI (Python 3.10+)
 - **Scope**: You have access to the project root. Refer to `.geminiignore` to see which directories are excluded from your scan.
-- **Dependencies**: Use `pydantic` for data schemas and `mistletoe` or `marko` for Markdown AST parsing.
 
 ## 📏 Coding Practice Guide
 
@@ -17,9 +16,9 @@ You are an expert Backend Architect. This project is a FastAPI-based service for
 - **Package Management**: "When adding new features, always check if new dependencies are required. If so, remind the user to update the root requirements.txt and provide the exact pip install command."
 
 ### 2. Environment and Constrains
-* VLM Endpoint:  scan environment variables (VLM_HOST_PATH, VLM_MODEL_NAME, and VLM_API_KEY) in project root directory .env files.
-* LLM Endpoint:  scan environment variables (LLM_HOST_PATH, LLM_MODEL_NAME, and LLM_API_KEY) in project root directory .env files.
-* Local Env: Windows (PowerShell), Python 3.10+, python interpreter at @.venv\Scripts\python.exe
+* **VLM Endpoint**:  scan environment variables (VLM_HOST_PATH, VLM_MODEL_NAME, and VLM_API_KEY) in project root directory .env files.
+* **LLM Endpoint**:  scan environment variables (LLM_HOST_PATH, LLM_MODEL_NAME, and LLM_API_KEY) in project root directory .env files.
+* **Local Environment**: This is a Windows VS Code, and you are running in PowerShell, Python 3.10+, python interpreter at @.venv\Scripts\python.exe
 
 ### 3. DevOps Practice
 * **unit test**: unless request specifically to skip `unit test`, you should always write unit test after updates, put unit test code under tests\ folder at project root directory.

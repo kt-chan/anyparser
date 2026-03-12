@@ -65,6 +65,7 @@ class VLMClient:
             },
         ]
 
+        logger.info("LLM Request - Image Analysis")
         for attempt in range(self.max_retries + 1):
             try:
                 async with self._semaphore:

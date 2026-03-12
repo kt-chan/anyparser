@@ -78,7 +78,7 @@ async def test_markdown_integrity(tmp_path):
     
     enriched_content = md_file.read_text()
     assert "![A technical title](images/test.jpg)" in enriched_content
-    assert "> **Contextual Description:** Detailed analysis." in enriched_content
+    assert "> <IMAGE_CONTEXTUAL_DESCRIPTION>Detailed analysis.</IMAGE_CONTEXTUAL_DESCRIPTION>" in enriched_content
     assert "Intro" in enriched_content
     assert "Outro" in enriched_content
 

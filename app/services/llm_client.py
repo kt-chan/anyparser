@@ -87,10 +87,10 @@ class LLMClient:
             "**Task:** Provide a detailed technical description explaining how this table supports the section summary above."
         )
 
+        logger.info("LLM Request - Table Analysis")
         for attempt in range(self.max_retries + 1):
             try:
                 async with self._semaphore:
-                    logger.info("LLM Request - Table Analysis")
                     response = await self.client.chat.completions.create(
                         model=self.model,
                         messages=[

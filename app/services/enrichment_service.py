@@ -224,7 +224,7 @@ class VLMEnrichmentService:
             match = self.image_pattern.match(tag)
             rel_path = match.group(1) if match else ""
             
-            enriched_tag = f"![{title}]({rel_path})\n\n> <IMAGE_CONTEXTUAL_DESCRIPTION>{' '.join(analysis.split())}</IMAGE_CONTEXTUAL_DESCRIPTION>\n"
+            enriched_tag = f"![{title}]({rel_path})\n\n<IMAGE_CONTEXTUAL_DESCRIPTION>{' '.join(analysis.split())}</IMAGE_CONTEXTUAL_DESCRIPTION>\n"
             return tag, enriched_tag, start, end
         except Exception as e:
             vlm_logger.error(f"Error processing image {image_path}: {e}")
@@ -239,7 +239,7 @@ class VLMEnrichmentService:
                 section_summary=sec_sum,
                 surrounding_text=text
             )
-            enriched_tag = f"{table_content}\n\n> <TABLE_CONTEXTUAL_DESCRIPTION>{' '.join(analysis.split())}</TABLE_CONTEXTUAL_DESCRIPTION>\n"
+            enriched_tag = f"{table_content}\n\n<TABLE_CONTEXTUAL_DESCRIPTION>{' '.join(analysis.split())}</TABLE_CONTEXTUAL_DESCRIPTION>\n"
             return table_content, enriched_tag, start, end
         except Exception as e:
             vlm_logger.error(f"Error processing table: {e}")

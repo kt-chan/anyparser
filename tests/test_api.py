@@ -19,12 +19,17 @@ def test_upload_pdf_wrong_type():
     assert response.status_code == 400
     assert "Only PDF files are supported" in response.json()["detail"]
 
+@patch("app.api.v1.process.vlm_enrichment_service.enrich_markdown")
 @patch("app.services.mineru_client.MinerUClient.process_pdf")
-@patch("app.api.v1.parse.compress_folder")
-@patch("app.api.v1.parse.cleanup_job_files")
-def test_upload_pdf_success(mock_cleanup, mock_compress, mock_process, sample_pdf):
+@patch("app.api.v1.process.compress_folder")
+@patch("app.api.v1.process.cleanup_job_files")
+def test_upload_pdf_success(mock_cleanup, mock_compress, mock_process, mock_enrich, sample_pdf):
+    mock_enrich.return_value = None
     # Mock output dir
     mock_output_dir = Path("temp/mock_output/vlm")
+    mock_output_dir.mkdir(parents=True, exist_ok=True)
+    (mock_output_dir / "test.md").write_text("# Test Content")
+    
     mock_process.return_value = mock_output_dir
     
     # Mock compress_folder to actually create a file so FileResponse doesn't fail
