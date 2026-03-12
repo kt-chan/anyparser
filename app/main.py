@@ -27,6 +27,9 @@ async def daily_cleanup_task():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    
+    logger.info(f"API Docs: http://{settings.HOST}:{settings.PORT}/docs#")
+    
     # Startup: Start daily cleanup task if enabled
     cleanup_task = None
     if settings.ENABLE_DAILY_CLEANUP:
@@ -57,4 +60,4 @@ async def health_check():
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8080)
+    uvicorn.run(app, host=settings.HOST, port=settings.PORT)
