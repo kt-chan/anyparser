@@ -22,6 +22,7 @@ class VLMEnrichmentService:
         self.llm_client = LLMClient()
         self.parser = MarkdownParser()
         self.image_pattern = re.compile(r"!\[.*?\]\(([^)]+)\)")
+        self.table_pattern = re.compile(r"(<table>.*?</table>|^\s*\|.*\|(?:\n\s*\|.*\|)+)", re.DOTALL | re.MULTILINE)
         self.content_batch_size = content_batch_size
         self.token_to_char_ratio = 4
 
@@ -50,8 +51,8 @@ class VLMEnrichmentService:
             vlm_logger.info(f"LLM summarization disabled, using raw content for {md_file_path}")
             self._fallback_to_raw_content(root)
         
-        vlm_logger.info(f"Starting context-aware VLM enrichment for {md_file_path}")
-        # Process images and update node.own_content directly
+        vlm_logger.info(f"Starting context-aware VLM/LLM enrichment for {md_file_path}")
+        # Process images/tables and update node.own_content directly
         await self._enrich_sections_recursive(root, md_file_path.parent)
         
         # Reconstruct the full content from updated tree if needed for saving to file
@@ -72,8 +73,6 @@ class VLMEnrichmentService:
     def _merge_sections(self, section: SemanticSection, max_chars: int):
         """
         Recursively merges sub-sections to reduce LLM calls while maintaining document order.
-        Sub-sections are merged into their parent or preceding sibling as long as the 
-        combined content stays within max_chars.
         """
         for child in section.children:
             self._merge_sections(child, max_chars)
@@ -124,10 +123,8 @@ class VLMEnrichmentService:
 
     def _fallback_to_raw_content(self, section: SemanticSection):
         """
-        Populates own_summary and context_summary with raw content (truncated) 
-        when LLM summarization is disabled.
+        Populates own_summary and context_summary with raw content snippets.
         """
-        # We use a snippet of the raw content for the prompt
         section.own_summary = section.own_content[:1000].strip()
         
         for child in section.children:
@@ -136,13 +133,12 @@ class VLMEnrichmentService:
         if not section.children:
             section.context_summary = section.own_summary
         else:
-            # Combine own snippet with child titles
             child_info = ", ".join([c.title for c in section.children])
             section.context_summary = f"{section.own_summary}\nSub-sections: {child_info}"
 
     async def _enrich_sections_recursive(self, section: SemanticSection, base_dir: Path):
         """
-        Processes images in this section and its children, updating own_content in place.
+        Processes images and tables in this section and its children.
         """
         document_summary = section.context_summary
 
@@ -150,9 +146,11 @@ class VLMEnrichmentService:
             new_path = current_path + [node.title] if node.title != "Root" else current_path
             heading_path = " > ".join(new_path)
             
-            image_tasks = []
-            matches = list(self.image_pattern.finditer(node.own_content))
-            for match in matches:
+            tasks = []
+            
+            # 1. Gather Image Tasks
+            image_matches = list(self.image_pattern.finditer(node.own_content))
+            for match in image_matches:
                 image_rel_path = match.group(1)
                 image_abs_path = base_dir / image_rel_path
                 
@@ -170,16 +168,39 @@ class VLMEnrichmentService:
                     match.start(),
                     match.end()
                 )
-                image_tasks.append(task)
+                tasks.append(task)
+
+            # 2. Gather Table Tasks
+            table_matches = list(self.table_pattern.finditer(node.own_content))
+            for match in table_matches:
+                table_content = match.group(0)
+                
+                start_ctx = max(0, match.start() - 250)
+                end_ctx = min(len(node.own_content), match.end() + 250)
+                surrounding_text = node.own_content[start_ctx:end_ctx]
+                
+                task = self.process_table(
+                    table_content,
+                    document_summary,
+                    heading_path,
+                    node.own_summary,
+                    surrounding_text,
+                    match.start(),
+                    match.end()
+                )
+                tasks.append(task)
             
-            if image_tasks:
-                results = await asyncio.gather(*image_tasks)
-                results.sort(key=lambda x: x[2], reverse=True) # Sort by start_idx descending
+            if tasks:
+                results = await asyncio.gather(*tasks)
+                # Results are tuples of (original_tag, enriched_tag, start_idx, end_idx)
+                # Filter out None results (failures)
+                valid_results = [r for r in results if r[1] is not None]
+                # Sort by start_idx descending to replace in-place without shifting indices
+                valid_results.sort(key=lambda x: x[2], reverse=True)
                 
                 new_own_content = node.own_content
-                for original_tag, enriched_tag, start_idx, end_idx in results:
-                    if enriched_tag:
-                        new_own_content = new_own_content[:start_idx] + enriched_tag + new_own_content[end_idx:]
+                for original_tag, enriched_tag, start_idx, end_idx in valid_results:
+                    new_own_content = new_own_content[:start_idx] + enriched_tag + new_own_content[end_idx:]
                 node.own_content = new_own_content
 
             # Process children
@@ -188,8 +209,7 @@ class VLMEnrichmentService:
 
         await process_node(section, [])
 
-    async def process_image(self, *args, **kwargs):
-        image_path, doc_sum, path, sec_sum, text, tag, start, end = args
+    async def process_image(self, image_path, doc_sum, path, sec_sum, text, tag, start, end):
         try:
             result = await self.vlm_client.analyze_image(
                 image_path=image_path,
@@ -198,16 +218,29 @@ class VLMEnrichmentService:
                 section_summary=sec_sum,
                 surrounding_text=text
             )
-            
             title = result.get("title", "Image")
             analysis = result.get("analysis", "No description available.")
             
             match = self.image_pattern.match(tag)
             rel_path = match.group(1) if match else ""
             
-            enriched_tag = f"![{title}]({rel_path})\n\n> **Contextual Description:** {analysis}"
+            enriched_tag = f"![{title}]({rel_path})\n\n> <IMAGE_CONTEXTUAL_DESCRIPTION>{' '.join(analysis.split())}</IMAGE_CONTEXTUAL_DESCRIPTION>\n"
             return tag, enriched_tag, start, end
-            
         except Exception as e:
             vlm_logger.error(f"Error processing image {image_path}: {e}")
             return tag, None, start, end
+
+    async def process_table(self, table_content, doc_sum, path, sec_sum, text, start, end):
+        try:
+            analysis = await self.llm_client.analyze_table(
+                table_content=table_content,
+                document_summary=doc_sum,
+                heading_path=path,
+                section_summary=sec_sum,
+                surrounding_text=text
+            )
+            enriched_tag = f"{table_content}\n\n> <TABLE_CONTEXTUAL_DESCRIPTION>{' '.join(analysis.split())}</TABLE_CONTEXTUAL_DESCRIPTION>\n"
+            return table_content, enriched_tag, start, end
+        except Exception as e:
+            vlm_logger.error(f"Error processing table: {e}")
+            return table_content, None, start, end

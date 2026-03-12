@@ -41,6 +41,6 @@ class Settings(BaseSettings):
     LOGS_DIR: str = "logs"
     ENABLE_DAILY_CLEANUP: bool = True
     
-    model_config = SettingsConfigDict(env_file=".env")
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
 settings = Settings()

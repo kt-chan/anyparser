@@ -1,0 +1,12 @@
+# Exclude environment and dependency folders
+.venv/
+node_modules/
+__pycache__/
+.pytest_cache/
+dist/
+build/
+
+# Exclude sensitive or binary files
+*.pyc
+*.so
+.git/

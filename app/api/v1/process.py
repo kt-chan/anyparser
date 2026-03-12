@@ -1,5 +1,6 @@
 from fastapi import APIRouter, UploadFile, File, HTTPException, BackgroundTasks
 from fastapi.responses import FileResponse
+from pydantic import BaseModel, Field
 from app.services.mineru_client import MinerUWrapper
 from app.services.enrichment_service import VLMEnrichmentService
 from app.services.chunking_service import ChunkingService
@@ -7,6 +8,7 @@ from app.utils.file_handler import save_upload_file, cleanup_file
 from app.utils.archive import compress_folder
 from loguru import logger
 from pathlib import Path
+from typing import List
 import shutil
 import base64
 import asyncio
@@ -15,6 +17,10 @@ router = APIRouter()
 mineru_client = MinerUWrapper()
 vlm_enrichment_service = VLMEnrichmentService()
 chunking_service = ChunkingService()
+
+class ChunkRequest(BaseModel):
+    markdown: str = Field(..., description="The markdown string to chunk")
+    chunk_size: int = Field(1000, description="The maximum size of each chunk (in tokens)", gt=0)
 
 def cleanup_job_files(paths: list[Path]):
     """Background task to cleanup temporary files and directories."""
@@ -107,4 +113,17 @@ async def chunk_pdf(file: UploadFile = File(...)):
         logger.error(f"Error chunking PDF: {e}")
         if isinstance(e, HTTPException):
             raise e
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/chunk")
+async def chunk_markdown(request: ChunkRequest):
+    """
+    Endpoint to chunk a markdown string into semantic parts.
+    """
+    logger.info(f"Received markdown chunking request")
+    try:
+        chunks = await chunking_service.chunk_markdown(request.markdown, request.chunk_size)
+        return {"chunks": chunks}
+    except Exception as e:
+        logger.error(f"Error chunking markdown: {e}")
         raise HTTPException(status_code=500, detail=str(e))

@@ -31,7 +31,7 @@ class LLMClient:
             logger.debug("LLM cache hit")
             return self._cache[cache_key]
 
-        system_prompt = "You are a document summarization assistant. Summarize the provided text concisely (up to 5 sentences or 100 words)."
+        system_prompt = "You are a document summarization assistant. Summarize the provided text concisely in text paragraph (up to 5 sentences or 100 words)."
         
         user_prompt = f"Text to summarize:\n{text}"
         if context_summaries:
@@ -60,4 +60,52 @@ class LLMClient:
                 raise e
             except Exception as e:
                 logger.error(f"LLM summarization failed: {e}")
+                raise e
+
+    async def analyze_table(
+        self,
+        table_content: str,
+        document_summary: str,
+        heading_path: str,
+        section_summary: str,
+        surrounding_text: str
+    ) -> str:
+        """
+        Analyzes a table and returns a technical contextual description.
+        """
+        system_prompt = (
+            "You are a document analysis assistant. Analyze the provided table based on its global and local document context. "
+            "Provide a summarized description in text paragraph (up to 5 sentences or 100 words) explaining how the table data supports the document context."
+        )
+
+        user_prompt = (
+            f"**Document Purpose:** {document_summary}\n"
+            f"**Document Catalog:** {heading_path}\n"
+            f"**Section Summary:** {section_summary}\n"
+            f"**Immediate Text:** {surrounding_text[:500]}\n\n"
+            f"**Table Data:**\n{table_content}\n\n"
+            "**Task:** Provide a detailed technical description explaining how this table supports the section summary above."
+        )
+
+        for attempt in range(self.max_retries + 1):
+            try:
+                async with self._semaphore:
+                    logger.info("LLM Request - Table Analysis")
+                    response = await self.client.chat.completions.create(
+                        model=self.model,
+                        messages=[
+                            {"role": "system", "content": system_prompt},
+                            {"role": "user", "content": user_prompt}
+                        ],
+                        temperature=0.3
+                    )
+                return response.choices[0].message.content.strip()
+            except RateLimitError as e:
+                if attempt < self.max_retries:
+                    logger.warning(f"LLM Rate limit hit, retrying in {self.retry_delay}s...")
+                    await asyncio.sleep(self.retry_delay)
+                    continue
+                raise e
+            except Exception as e:
+                logger.error(f"LLM table analysis failed: {e}")
                 raise e

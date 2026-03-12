@@ -318,3 +318,101 @@ The server will wrap the MinerU PDF parsing engine into an MCP tool that provide
                 # Workspace for PDF processing
 
 ```
+
+
+# Task  5
+
+**Role:** Senior Python Engineer specializing in AI Infrastructure and Document Processing.
+
+**Project Context:**
+You are building `anyparser`, a FastAPI service for smart RAG chunking. Traditional chunkers split text at arbitrary character counts, losing semantic meaning. `anyparser` must use an Abstract Syntax Tree (AST) approach to treat a document as a hierarchy, preserving relationships between headings, tables, and images.
+
+**Task:**
+Implement a `MarkdownASTChunker` class and a FastAPI wrapper. The core logic must follow a "Parse-Flatten-Accumulate" pattern based on AST Depth First Search (DFS).
+
+**Technical Requirements:**
+
+1. **AST Generation & DFS Traversal:**
+* Use the `marko` library to parse Markdown into an AST.
+* Implement a DFS traversal to extract "Semantic Units." A Semantic Unit is a leaf node (Paragraph, List, Table, Heading, Blockquote).
+* **Contextual Breadcrumbs:** During DFS, maintain a `header_stack`. Every Semantic Unit must carry its current `breadcrumb_path` (e.g., `"H1 > H2 > H3"`).
+
+
+2. **Smart Aggregation Logic:**
+* **Input:** A list of Semantic Units from the DFS.
+* **Process:** Iterate through units $T$ and $T+1$.
+* **Merge:** If `len(CurrentChunk) + len(Unit_T) <= chunk_size`, merge `Unit_T` into the current chunk.
+* **Split:** If `len(Unit_T) > chunk_size`, check its type:
+* **Table/Image Safeguard:** If the node is a `Table` or `Image`, **DO NOT** split it. Keep it as one chunk even if it exceeds `chunk_size` to maintain data integrity.
+* **Text Split:** If it is a `Paragraph` or `List` and exceeds the limit, split it recursively using newline boundaries (`\n`) as the primary delimiter.
+
+
+
+
+3. **Special Handling for Images & Descriptions:**
+* The document contains custom `<IMAGE_CONTEXTUAL_DESCRIPTION>` tags.
+* **Logic:** If a Paragraph is followed immediately by an Image and a Contextual Description, they must be treated as a single atomic unit and kept in the same chunk to provide the LLM with visual context for the text.
+
+
+4. **FastAPI Endpoint:**
+* **Route:** `POST /chunk`
+* **Params:** `text` (Markdown string), `chunk_size` (int, default=1024).
+* **Response:** A list of JSON objects:
+```json
+{
+  "content": "...",
+  "metadata": {
+    "breadcrumb": "H1 > H2",
+    "type": "table|paragraph",
+    "size": 123
+  }
+}
+
+```
+
+5. **Test:** Sample input for testing @tests\test.md, write unit test under @tests\ folder
+
+**Coding Standards:**
+* Ensure rigorous type hinting (`typing` module).
+* Implement clean error handling for malformed Markdown or oversized tables.
+* The code should be modular: `Parser`, `Chunker`, and `Server` should be distinct.
+
+
+### Reference Environment and Constrains
+
+* **VLM Endpoint:**  scan environment variables (VLM_HOST_PATH, VLM_MODEL_NAME, and VLM_API_KEY) in project root directory .env files.
+* **LLM Endpoint:**  scan environment variables (LLM_HOST_PATH, LLM_MODEL_NAME, and LLM_API_KEY) in project root directory .env files.
+* **Local Env:** Windows (PowerShell), Python 3.10+, python interpreter at @.venv\Scripts\python.exe
+* **Project Structure (Modular)**: Implement the project using this strict directory hierarchy to ensure maintainability:
+
+```text
+/anyparser
+├── app/
+│   ├── __init__.py
+│   ├── main.py              # FastAPI app initialization & exception handlers
+│   ├── api/                 # Endpoint definitions
+│   │   └── v1/
+│   │       └── parse.py     # OpenAI-compatible PDF upload routes
+│   ├── core/                # Configuration and global constants
+│   │   └── config.py        # SSH paths, VLLM endpoints, & Env vars
+│   ├── services/            # Business Logic (The "Brain")
+│   │   ├── mineru_client.py # MinerU SDK integration & VLM-HTTP logic
+│   │   └── ssh_manager.py   # Paramiko wrapper for remote host commands
+│   └── utils/               # Helper functions
+│       ├── archive.py       # Tar/Zip compression logic
+│       └── file_handler.py  # Local temp file management
+├── keys/
+│   └── id_rsa               # SSH Private Key (Mount/Copy here)
+├── logs/                    # Application and SDK log files
+├── tests/                   # Pytest suite
+│   ├── conftest.py          # Shared fixtures (e.g., mock SSH)
+│   ├── test_api.py          # Endpoint integration tests
+│   └── test_mineru.py       # Logic unit tests
+├── temp/                    # Workspace for PDF processing
+├── pyproject.toml           # Modern dependency management (uv)
+└── Dockerfile               # Client-side deployment
+                # Workspace for PDF processing
+
+```
+
+use python-chunker-architect to generate a FastAPI endpoint in @app\api\v1\process.py. I want a POST route /chunk that takes a Markdown string and a chunk_size limit, and returns the semantic chunks using the mistletoe AST logic from your reference files."

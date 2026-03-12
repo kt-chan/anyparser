@@ -1,0 +1,5 @@
+# Markdown AST Parsing
+mistletoe==1.3.0
+
+# Optional: For better sentence splitting if the agent writes complex logic
+# nltk
