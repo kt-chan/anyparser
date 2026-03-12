@@ -21,7 +21,10 @@ You are an expert Backend Architect. This project is a FastAPI-based service for
 * LLM Endpoint:  scan environment variables (LLM_HOST_PATH, LLM_MODEL_NAME, and LLM_API_KEY) in project root directory .env files.
 * Local Env: Windows (PowerShell), Python 3.10+, python interpreter at @.venv\Scripts\python.exe
 
-### 3. Project Structure (Modular): 
+### 3. DevOps Practice
+* **unit test**: unless request specifically to skip `unit test`, you should always write unit test after updates, put unit test code under tests\ folder at project root directory.
+
+### 4. Project Structure (Modular): 
 Implement the project using this strict directory hierarchy to ensure maintainability:
 /anyparser
 ├── app/
