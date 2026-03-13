@@ -10,9 +10,29 @@ from app.utils.file_handler import cleanup_temp_dir
 from loguru import logger
 
 # Configure Logging
-log_file = os.path.join(settings.LOGS_DIR, "main.log")
 os.makedirs(settings.LOGS_DIR, exist_ok=True)
-logger.add(log_file, rotation="500 MB", level="INFO")
+
+# Remove default handler
+logger.remove()
+
+# Add handler for all logs
+logger.add(
+    os.path.join(settings.LOGS_DIR, "app.log"),
+    rotation="500 MB",
+    level=settings.LOG_LEVEL,
+    enqueue=True,
+)
+
+# Add handler for error logs only
+logger.add(
+    os.path.join(settings.LOGS_DIR, "app.error"),
+    rotation="500 MB",
+    level="ERROR",
+    enqueue=True,
+)
+
+# Also log to stdout for container logs/debugging
+logger.add(sys.stdout, level=settings.LOG_LEVEL)
 
 async def daily_cleanup_task():
     """Background task to cleanup temp dir daily."""

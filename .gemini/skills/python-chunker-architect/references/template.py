@@ -1,115 +1,221 @@
 """
-GOLDEN TEMPLATE: Markdown Semantic Chunker (DFS + Breadcrumbs)
-Logic: AST-based Depth-First Search traversal with atomic protection for Tables/Images.
+GOLDEN TEMPLATE: Markdown Semantic Chunker (AST Data Structure)
+Logic: Builds a formal Semantic Tree, merges/splits sibling nodes, aggregates stats, and exports.
 """
+import uuid
 import re
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional, Tuple
 import marko
-from marko.block import Document, Heading, Paragraph, List as MDList, Quote, FencedCode, HTMLBlock
-from marko.ext.gfm import gfm # For table support
+from marko.block import Heading, Paragraph, List as MDList, Quote, FencedCode, HTMLBlock
+from marko.ext.gfm import gfm
 from marko.md_renderer import MarkdownRenderer
 
+class SemanticSection:
+    """Core AST Node representing either a structural heading or a content leaf."""
+    def __init__(self, title: str, level: int, content: str = ""):
+        self.node_id: str = str(uuid.uuid4())
+        self.title: str = title
+        self.level: int = level
+        self.own_content: str = content
+        
+        # Bi-directional pointers
+        self.parent: Optional['SemanticSection'] = None
+        self.children: List['SemanticSection'] = []
+        self.next_sibling: Optional['SemanticSection'] = None
+        self.prev_sibling: Optional['SemanticSection'] = None
+        
+        # Local Inventory
+        self.image_count: int = 0
+        self.table_count: int = 0
+        self.code_block_count: int = 0
+        self.token_count: int = 0  # Approximated by word count in this template
+        
+        # Aggregated Statistics
+        self.total_descendants: int = 0
+        self.total_token_count: int = 0
+        self.has_tables_in_subtree: bool = False
+        self.has_images_in_subtree: bool = False
+
+    def add_child(self, child: 'SemanticSection') -> None:
+        child.parent = self
+        if self.children:
+            last_child = self.children[-1]
+            last_child.next_sibling = child
+            child.prev_sibling = last_child
+        self.children.append(child)
+
+    def aggregate_statistics(self) -> None:
+        self.total_token_count = self.token_count
+        self.total_descendants = len(self.children)
+        self.has_tables_in_subtree = self.table_count > 0
+        self.has_images_in_subtree = self.image_count > 0
+
+        for child in self.children:
+            child.aggregate_statistics()
+            self.total_token_count += child.total_token_count
+            self.total_descendants += child.total_descendants
+            self.has_tables_in_subtree |= child.has_tables_in_subtree
+            self.has_images_in_subtree |= child.has_images_in_subtree
+
+    def get_ancestors(self) -> List['SemanticSection']:
+        ancestors, current = [], self.parent
+        while current:
+            ancestors.append(current)
+            current = current.parent
+        return ancestors[::-1]
+
+    def get_breadcrumb_path(self) -> str:
+        path = [node.title for node in self.get_ancestors() if node.title]
+        if self.title: path.append(self.title)
+        return " > ".join(path)
+
+    def to_rag_document(self) -> Dict[str, Any]:
+        return {
+            "id": self.node_id,
+            "text": self.own_content,
+            "metadata": {
+                "title": self.title,
+                "breadcrumb": self.get_breadcrumb_path(),
+                "level": self.level,
+                "total_tokens": self.total_token_count,
+                "has_tables": self.has_tables_in_subtree,
+                "has_images": self.has_images_in_subtree,
+            }
+        }
+
+
 class ASTSemanticChunker:
-    def __init__(self, chunk_size_limit: int = 1024):
+    def __init__(self, chunk_size_limit: int = 500):
         self.chunk_size_limit = chunk_size_limit
-        # Initialize marko with GFM for Table support and a Markdown renderer to convert nodes back to text
         self.md = marko.Markdown(extensions=['gfm'], renderer=MarkdownRenderer)
 
-    def get_chunks(self, markdown_text: str) -> List[Dict[str, Any]]:
-        ast = self.md.parse(markdown_text)
+    def process_document(self, markdown_text: str) -> List[Dict[str, Any]]:
+        """Main pipeline: Parse -> Build AST -> Prune/Chunk -> Aggregate -> Export."""
+        # 1. Parse markdown
+        marko_ast = self.md.parse(markdown_text)
         
-        # 1. DFS Traversal to extract semantic units
-        semantic_units = []
-        self._dfs_traverse(ast, header_stack=[], units_accumulator=semantic_units)
+        # 2. Build the structural tree
+        root_node = self._build_tree(marko_ast)
         
-        # 2. Smart Aggregation & Splitting
-        return self._aggregate_units(semantic_units)
-
-    def _dfs_traverse(self, node: Any, header_stack: List[str], units_accumulator: List[Dict]):
-        """Recursively walks the AST, updating breadcrumbs and extracting leaf units."""
+        # 3. Smart chunking (Merge & Split leaf nodes)
+        self._prune_and_chunk(root_node)
         
-        # Update breadcrumbs if we hit a Heading
-        if isinstance(node, Heading):
-            level = node.level
-            heading_text = self.md.render(node).strip().strip('#').strip()
-            
-            # Pop headers that are at the same or deeper level
-            header_stack[:] = header_stack[:level-1]
-            header_stack.append(heading_text)
-            return # Headings become metadata, we don't usually chunk them alone
-
-        # Identify extractable leaf blocks
-        is_leaf_block = isinstance(node, (Paragraph, MDList, Quote, FencedCode, HTMLBlock))
-        is_table = type(node).__name__ == 'Table' # GFM Table
-
-        if is_leaf_block or is_table:
-            rendered_text = self.md.render(node).strip()
-            if rendered_text:
-                units_accumulator.append({
-                    "content": rendered_text,
-                    "type": type(node).__name__,
-                    "breadcrumbs": list(header_stack),
-                    "is_atomic": is_table or "<IMAGE_CONTEXTUAL_DESCRIPTION>" in rendered_text
-                })
-            return
-
-        # Continue DFS for children if not a designated leaf block
-        if hasattr(node, 'children') and isinstance(node.children, list):
-            for child in node.children:
-                self._dfs_traverse(child, header_stack, units_accumulator)
-
-    def _aggregate_units(self, units: List[Dict]) -> List[Dict[str, Any]]:
-        """Merges small units and force-splits excessively large text nodes."""
-        chunks = []
-        current_chunk_content = ""
-        current_breadcrumbs = []
+        # 4. Bubble up RAG statistics
+        root_node.aggregate_statistics()
         
-        def flush():
-            nonlocal current_chunk_content
-            if current_chunk_content:
-                chunks.append({
-                    "content": current_chunk_content.strip(),
-                    "metadata": {"breadcrumb_path": " > ".join(current_breadcrumbs)}
-                })
-                current_chunk_content = ""
-
-        for unit in units:
-            text = unit["content"]
-            unit_len = len(text)
-            
-            # Update breadcrumb context for the active chunk
-            if not current_chunk_content:
-                current_breadcrumbs = unit["breadcrumbs"]
-
-            # Merge Condition: Fits within limit
-            if len(current_chunk_content) + unit_len <= self.chunk_size_limit:
-                current_chunk_content += ("\n\n" if current_chunk_content else "") + text
-            else:
-                # Flush the current accumulator
-                flush()
+        # 5. Export only the content leaf nodes
+        rag_docs = []
+        for node in self._get_leaf_nodes(root_node):
+            if node.own_content.strip():
+                rag_docs.append(node.to_rag_document())
                 
-                # Split Condition: Single node exceeds limit
-                if unit_len > self.chunk_size_limit:
-                    if unit["is_atomic"]:
-                        # Protection Measure: Never split tables or specific image descriptions
-                        current_chunk_content = text
-                        current_breadcrumbs = unit["breadcrumbs"]
-                        flush()
-                    else:
-                        # Force-split large text nodes at sentence boundaries
-                        sentences = re.split(r'(?<=[.!?]) +', text)
-                        for sentence in sentences:
-                            if len(current_chunk_content) + len(sentence) > self.chunk_size_limit:
-                                flush()
-                                current_breadcrumbs = unit["breadcrumbs"]
-                            current_chunk_content += (" " if current_chunk_content else "") + sentence
-                        flush()
-                else:
-                    # Node fits by itself, start a new accumulation
-                    current_chunk_content = text
-                    current_breadcrumbs = unit["breadcrumbs"]
+        return rag_docs
 
-        # Final flush for any remaining content
-        flush()
-        
-        return chunks
+    def _build_tree(self, marko_ast: Any) -> SemanticSection:
+        """Infers hierarchy from flat markdown and attaches content as leaf children."""
+        root = SemanticSection(title="Document Root", level=0)
+        active_headings = {0: root}
+
+        for child in marko_ast.children:
+            if isinstance(child, Heading):
+                level = child.level
+                title = self.md.render(child).strip('#').strip()
+                new_section = SemanticSection(title=title, level=level)
+                
+                # Find closest structural parent
+                parent_level = level - 1
+                while parent_level > 0 and parent_level not in active_headings:
+                    parent_level -= 1
+                
+                active_headings[parent_level].add_child(new_section)
+                active_headings[level] = new_section
+                
+                # Clear deeper transient headings
+                for k in list(active_headings.keys()):
+                    if k > level: del active_headings[k]
+            else:
+                # It's a content block -> Treat as a Leaf Node
+                content = self.md.render(child).strip()
+                if not content: continue
+                
+                deepest_level = max(active_headings.keys())
+                parent = active_headings[deepest_level]
+                
+                leaf_node = SemanticSection(title="", level=parent.level + 1, content=content)
+                leaf_node.token_count = len(content.split()) # Proxy for token count
+                
+                node_type = type(child).__name__
+                if node_type == 'Table': leaf_node.table_count = 1
+                elif "<IMAGE_" in content or node_type == 'Image': leaf_node.image_count = 1
+                elif "<CODE_" in content or node_type == 'FencedCode': leaf_node.code_block_count = 1
+                    
+                parent.add_child(leaf_node)
+                
+        return root
+
+    def _prune_and_chunk(self, node: SemanticSection) -> None:
+        """Post-order traversal to merge small siblings and split oversized ones."""
+        new_children = []
+        current_merged_leaf = None
+
+        for child in node.children:
+            if child.title: # It's a structural branch, recurse into it
+                if current_merged_leaf:
+                    new_children.append(current_merged_leaf)
+                    current_merged_leaf = None
+                self._prune_and_chunk(child)
+                new_children.append(child)
+            else: # It's a content leaf
+                if current_merged_leaf is None:
+                    current_merged_leaf = child
+                else:
+                    # Merge Condition
+                    if current_merged_leaf.token_count + child.token_count <= self.chunk_size_limit:
+                        current_merged_leaf.own_content += "\n\n" + child.own_content
+                        current_merged_leaf.token_count += child.token_count
+                        current_merged_leaf.table_count += child.table_count
+                        current_merged_leaf.image_count += child.image_count
+                        current_merged_leaf.code_block_count += child.code_block_count
+                    else:
+                        # Flush current and start a new merged block
+                        new_children.append(current_merged_leaf)
+                        current_merged_leaf = child
+
+        if current_merged_leaf:
+            new_children.append(current_merged_leaf)
+
+        # Split Condition for oversized leaf nodes
+        final_children = []
+        for child in new_children:
+            is_atomic = child.table_count > 0 or child.image_count > 0 or child.code_block_count > 0
+            if child.title == "" and child.token_count > self.chunk_size_limit and not is_atomic:
+                # Naive sentence split for oversized blocks
+                sentences = re.split(r'(?<=[.!?]) +', child.own_content)
+                temp_content = ""
+                for s in sentences:
+                    if len(temp_content.split()) + len(s.split()) > self.chunk_size_limit and temp_content:
+                        split_leaf = SemanticSection(title="", level=child.level, content=temp_content.strip())
+                        split_leaf.token_count = len(temp_content.split())
+                        final_children.append(split_leaf)
+                        temp_content = s
+                    else:
+                        temp_content += (" " if temp_content else "") + s
+                if temp_content:
+                    split_leaf = SemanticSection(title="", level=child.level, content=temp_content.strip())
+                    split_leaf.token_count = len(temp_content.split())
+                    final_children.append(split_leaf)
+            else:
+                final_children.append(child)
+
+        # Re-attach the pruned/split children ensuring sibling links are re-calculated
+        node.children = []
+        for child in final_children:
+            node.add_child(child)
+
+    def _get_leaf_nodes(self, node: SemanticSection) -> List[SemanticSection]:
+        """Utility to extract purely content-bearing nodes."""
+        leaves = []
+        if node.title == "": leaves.append(node)
+        for child in node.children:
+            leaves.extend(self._get_leaf_nodes(child))
+        return leaves

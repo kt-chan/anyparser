@@ -51,6 +51,7 @@ class Settings(BaseSettings):
     PORT: int = Field(8080, description="Local port to bind")
     TEMP_DIR: str = Field("temp", description="Temporary directory")
     LOGS_DIR: str = Field("logs", description="Logs directory")
+    LOG_LEVEL: str = Field("INFO", description="Global log level (DEBUG, INFO, ERROR)")
     ENABLE_DAILY_CLEANUP: bool = Field(True, description="Enable daily temp cleanup")
 
     model_config = SettingsConfigDict(

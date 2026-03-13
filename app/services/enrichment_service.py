@@ -10,10 +10,6 @@ from app.utils.markdown_parser import MarkdownParser, SemanticSection
 from app.core.config import settings
 import os
 
-# Setup logger for this service
-log_file = Path(settings.LOGS_DIR) / "vlm_enrichment_service.log"
-os.makedirs(settings.LOGS_DIR, exist_ok=True)
-logger.add(log_file, rotation="500 MB", level="INFO", filter=lambda record: record["extra"].get("service") == "vlm_enrichment")
 vlm_logger = logger.bind(service="vlm_enrichment")
 
 class VLMEnrichmentService:
@@ -227,7 +223,7 @@ class VLMEnrichmentService:
             match = self.image_pattern.match(tag)
             rel_path = match.group(1) if match else ""
             
-            enriched_tag = f"![{title}]({rel_path})\n\n<IMAGE_CONTEXTUAL_DESCRIPTION>{' '.join(analysis.split())}</IMAGE_CONTEXTUAL_DESCRIPTION>\n"
+            enriched_tag = f"<ANYPARSER><ANYPARSER_IMAGE>![{title}]({rel_path})\n\n<IMAGE_CONTEXTUAL_DESCRIPTION>{' '.join(analysis.split())}</IMAGE_CONTEXTUAL_DESCRIPTION></ANYPARSER_IMAGE></ANYPARSER>\n"
             return tag, enriched_tag, start, end
         except Exception as e:
             vlm_logger.error(f"Error processing image {image_path}: {e}")
@@ -242,7 +238,7 @@ class VLMEnrichmentService:
                 section_summary=sec_sum,
                 surrounding_text=text
             )
-            enriched_tag = f"{table_content}\n\n<TABLE_CONTEXTUAL_DESCRIPTION>{' '.join(analysis.split())}</TABLE_CONTEXTUAL_DESCRIPTION>\n"
+            enriched_tag = f"<ANYPARSER><ANYPARSER_TABLE>{table_content}\n\n<TABLE_CONTEXTUAL_DESCRIPTION>{' '.join(analysis.split())}</TABLE_CONTEXTUAL_DESCRIPTION></ANYPARSER_TABLE></ANYPARSER>\n"
             return table_content, enriched_tag, start, end
         except Exception as e:
             vlm_logger.error(f"Error processing table: {e}")
