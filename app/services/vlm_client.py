@@ -12,19 +12,21 @@ class VLMClient:
 
     def __init__(self):
         self.client = AsyncOpenAI(
-            api_key=settings.VLM_API_KEY, base_url=settings.VLM_HOST_PATH
+            api_key=settings.VLM_API_KEY, 
+            base_url=settings.VLM_HOST_PATH, 
+            timeout=60.0
         )
         self.model = settings.VLM_MODEL_NAME
         self.max_retries = 3
-        self.retry_delay = 2  # seconds
+        self.retry_delay = 5  # seconds
 
     async def analyze_image(
-        self, 
-        image_path: Path, 
+        self,
+        image_path: Path,
         document_summary: str,
         heading_path: str,
         section_summary: str,
-        surrounding_text: str
+        surrounding_text: str,
     ) -> dict:
         """
         Analyzes an image using the VLM with recursive context stack.
@@ -50,7 +52,7 @@ class VLMClient:
             "**Task:** Analyze the image and provide a descriptive alt-text and a detailed contextual description "
             "that explains how this image supports the section summary above."
         )
-        
+
         messages_content = [
             {"role": "system", "content": system_prompt},
             {
@@ -69,7 +71,9 @@ class VLMClient:
         for attempt in range(self.max_retries + 1):
             try:
                 async with self._semaphore:
-                    logger.info(f"VLM Request - Model: {self.model} for {image_path.name}")
+                    logger.info(
+                        f"VLM Request - Model: {self.model} for {image_path.name}"
+                    )
                     response = await self.client.chat.completions.create(
                         model=self.model, messages=messages_content, temperature=0.2
                     )

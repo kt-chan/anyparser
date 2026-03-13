@@ -38,6 +38,9 @@ class VLMEnrichmentService:
         with open(md_file_path, "r", encoding="utf-8") as f:
             content = f.read()
 
+        vlm_logger.info(f"Restoring header hierarchy for {md_file_path}")
+        content = await self._restore_header_hierarchy(content)
+
         vlm_logger.info(f"Parsing structural tree for {md_file_path}")
         root = self.parser.parse(content)
 
@@ -244,3 +247,59 @@ class VLMEnrichmentService:
         except Exception as e:
             vlm_logger.error(f"Error processing table: {e}")
             return table_content, None, start, end
+
+    async def _restore_header_hierarchy(self, content: str) -> str:
+        """
+        Identifies potential header lines and uses LLM to restore correct nesting levels.
+        """
+        lines = content.splitlines()
+        potential_headers = []
+        header_indices = []
+
+        # Heuristic to find potential headers
+        for i, line in enumerate(lines):
+
+            if not line.strip():
+                continue
+            
+            # 1. Already a header
+            if line.startswith("#"):
+                potential_headers.append(line)
+                header_indices.append(i)
+                continue
+            
+            # 2. Numbering pattern (e.g., 1.1, 2 - , A.)
+            if re.match(r"^\d+(\.\d+)*\s*[-.]\s+", line) or re.match(r"^[A-Z]\.\s+", line):
+                potential_headers.append(line)
+                header_indices.append(i)
+                continue
+            
+            # 3. Short line ending with page number (common in MinerU TOC/headers)
+            if len(line) < 100 and re.match(r"^.*?\s+\d+$", line):
+                potential_headers.append(line)
+                header_indices.append(i)
+                continue
+
+        if not potential_headers:
+            return content
+
+        # Call LLM to restore hierarchy
+        try:
+            corrected_headers = await self.llm_client.restore_headers(potential_headers)
+            
+            # Map back to original lines
+            new_lines = list(lines)
+            for i, corrected in enumerate(corrected_headers):
+                if i < len(header_indices):
+                    idx = header_indices[i]
+                    # Ensure the corrected text is what the LLM returned
+                    # Remove all leading '#' characters from the text
+                    stripped_text = corrected.corrected_text.lstrip('#')
+                    # Prepend '#' repeated 'level' times
+                    corrected.corrected_text = '#' * corrected.level + stripped_text
+                    new_lines[idx] = corrected.corrected_text
+            
+            return "\n".join(new_lines)
+        except Exception as e:
+            vlm_logger.error(f"Failed to restore header hierarchy: {e}")
+            return content

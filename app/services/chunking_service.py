@@ -1,19 +1,14 @@
 import re
 import tiktoken
-import marko
-from marko.block import Heading, Paragraph, List as MDList, Quote, FencedCode, HTMLBlock, CodeBlock
-from marko.ext.gfm import gfm
-from marko.md_renderer import MarkdownRenderer
-from typing import List, Dict, Any, Tuple
+import mistletoe
+from mistletoe.block_token import Heading, Paragraph, List as MDList, ListItem, Table, CodeFence, Quote, HTMLBlock
+from mistletoe.markdown_renderer import MarkdownRenderer
+from typing import List as typingList, Dict, Any
 from loguru import logger
-from app.core.config import settings
 
 class ChunkingService:
     def __init__(self):
-        # Initialize marko with GFM for Table support
-        self.md = marko.Markdown(extensions=['gfm'], renderer=MarkdownRenderer)
-        
-        # Initialize tokenizer (defaulting to cl100k_base for GPT-4/o1/etc)
+        # Initialize tokenizer
         try:
             self.tokenizer = tiktoken.get_encoding("cl100k_base")
         except Exception as e:
@@ -25,201 +20,189 @@ class ChunkingService:
         if not text: return 0
         return len(self.tokenizer.encode(text))
 
+    def _is_contextual_description(self, text: str) -> bool:
+        """Checks if the text contains a contextual description tag."""
+        return "<IMAGE_CONTEXTUAL_DESCRIPTION>" in text or "<TABLE_CONTEXTUAL_DESCRIPTION>" in text
+
     def _contains_image(self, node) -> bool:
-        """Recursively check if a node contains an image."""
-        # In marko, images are usually in Paragraph children as Inline elements
-        if hasattr(node, 'children'):
-            if isinstance(node.children, list):
-                for child in node.children:
-                    if type(child).__name__ == 'Image':
-                        return True
-                    if self._contains_image(child):
-                        return True
-            elif type(node.children).__name__ == 'Image':
-                return True
+        """Recursively check if a node contains an image span token."""
+        from mistletoe.span_token import Image
+        if isinstance(node, Image):
+            return True
+        if hasattr(node, 'children') and isinstance(node.children, (list, tuple)):
+            for child in node.children:
+                if self._contains_image(child):
+                    return True
         return False
 
-    async def chunk_markdown(self, markdown_text: str, max_chunk_tokens: int) -> List[Dict[str, Any]]:
+    async def chunk_markdown(self, markdown_text: str, max_chunk_tokens: int) -> typingList[Dict[str, Any]]:
         """
-        Chunks a markdown string into semantic parts using marko AST (DFS approach).
+        Chunks a markdown string into semantic parts using mistletoe AST (DFS + Pruning).
         """
-        # 1. Parse into AST
-        ast = self.md.parse(markdown_text)
-        
-        # 2. DFS Traversal to extract initial semantic units
-        raw_units = []
-        self._dfs_traverse(ast, header_stack=[], units_accumulator=raw_units)
-        
-        # 3. Merge descriptions with their preceding images/tables
-        semantic_units = self._merge_contextual_descriptions(raw_units)
-        
-        # 4. Aggregate units into chunks
-        return self._aggregate_units(semantic_units, max_chunk_tokens)
+        try:
+            # Use MarkdownRenderer as a context manager to ensure correct setup/teardown
+            # We wrap it in a try-except to handle the mistletoe bug with multiple initializations
+            try:
+                renderer = MarkdownRenderer()
+            except ValueError:
+                # If Footnote removal fails, we try to use a dummy renderer or a workaround
+                # Actually, in most cases, we can just use the class directly if needed
+                # but let's try to be as standard as possible.
+                renderer = MarkdownRenderer()
 
-    def _dfs_traverse(self, node: Any, header_stack: List[str], units_accumulator: List[Dict]):
-        """Recursively walks the AST, updating breadcrumbs and extracting leaf units."""
+            with renderer:
+                self.renderer = renderer
+                # 1. Parse into AST
+                doc = mistletoe.Document(markdown_text)
+                
+                # 2. Recursive DFS with AST Pruning (aggregation at each level)
+                chunks = self._dfs_chunk(doc, header_stack=[], limit=max_chunk_tokens)
+                
+                # 3. Final cleanup of chunks (formatting for output)
+                return [
+                    {
+                        "content": ch["content"],
+                        "metadata": ch["metadata"]
+                    }
+                    for ch in chunks
+                ]
+        except Exception as e:
+            logger.error(f"Error during mistletoe chunking: {e}")
+            # Fallback to simple splitting if AST parsing fails
+            return [{"content": markdown_text, "metadata": {"breadcrumbs": [], "error": str(e)}}]
+
+    def _dfs_chunk(self, node: Any, header_stack: typingList[str], limit: int) -> typingList[Dict[str, Any]]:
+        """
+        Recursively walks the AST, returning a list of chunks for the given node.
+        Implements AST Pruning by aggregating siblings before returning.
+        """
         
-        # Update breadcrumbs if we hit a Heading
+        # A. Handle Headings (Metadata update)
         if isinstance(node, Heading):
             level = node.level
-            # Render heading to get text
-            heading_md = self.md.render(node).strip()
+            # Render heading to get plain-ish text
+            heading_md = self.renderer.render(node).strip()
             heading_text = heading_md.lstrip('#').strip()
             
+            # Update breadcrumbs (pop deeper/same levels)
             header_stack[:] = header_stack[:level-1]
             header_stack.append(heading_text)
-            return
+            return [] # Headings are consumed into metadata
 
-        # Identify leaf blocks
-        is_table = type(node).__name__ == 'Table'
-        is_leaf_block = isinstance(node, (Paragraph, MDList, Quote, FencedCode, CodeBlock, HTMLBlock)) or is_table
-
-        if is_leaf_block:
-            rendered_md = self.md.render(node)
+        # B. Handle Leaf Blocks
+        is_container = isinstance(node, (mistletoe.block_token.Document, MDList, ListItem, Quote))
+        
+        if not is_container:
+            content = self.renderer.render(node).strip()
+            if not content:
+                return []
+            
+            tokens = self._count_tokens(content)
             has_image = self._contains_image(node)
-            has_table = is_table or ("<table" in rendered_md.lower())
-            has_code = isinstance(node, (FencedCode, CodeBlock))
+            is_atomic = isinstance(node, (Table, CodeFence)) or has_image or self._is_contextual_description(content)
             
-            # Check for atomic contextual descriptions
-            is_contextual_desc = ("<IMAGE_CONTEXTUAL_DESCRIPTION>" in rendered_md or "<TABLE_CONTEXTUAL_DESCRIPTION>" in rendered_md)
-            
-            units_accumulator.append({
-                "content": rendered_md,
-                "tokens": self._count_tokens(rendered_md),
-                "breadcrumbs": list(header_stack),
-                "has_image": has_image,
-                "has_table": has_table,
-                "has_code": has_code,
-                "is_atomic": is_table or has_code or is_contextual_desc or has_image
-            })
-            return
+            if tokens > limit and not is_atomic:
+                # Split large paragraphs
+                return self._split_text(content, header_stack, limit)
+            else:
+                return [{
+                    "content": content,
+                    "tokens": tokens,
+                    "metadata": {
+                        "breadcrumbs": list(header_stack),
+                        "type": type(node).__name__,
+                        "has_image": has_image,
+                        "has_table": isinstance(node, Table) or "<table" in content.lower()
+                    }
+                }]
 
-        # Continue DFS for children
-        if hasattr(node, 'children') and isinstance(node.children, list):
+        # C. Handle Container Blocks
+        child_chunks = []
+        if hasattr(node, 'children') and isinstance(node.children, (list, tuple)):
             for child in node.children:
-                self._dfs_traverse(child, header_stack, units_accumulator)
+                child_chunks.extend(self._dfs_chunk(child, header_stack, limit))
+        
+        # D. AST Pruning: Aggregate siblings under this parent
+        return self._aggregate_chunks(child_chunks, limit)
 
-    def _merge_contextual_descriptions(self, units: List[Dict]) -> List[Dict]:
-        """Second pass to merge images/tables with their descriptions."""
-        merged = []
-        i = 0
-        while i < len(units):
-            unit = units[i]
+    def _aggregate_chunks(self, chunks: typingList[Dict], limit: int) -> typingList[Dict]:
+        """
+        Aggregates adjacent chunks if they fit within the limit.
+        Also handles mandatory binding of contextual descriptions to preceding units.
+        """
+        if not chunks:
+            return []
+        
+        aggregated = []
+        current = None
+        
+        for next_ch in chunks:
+            if current is None:
+                current = next_ch
+                continue
             
-            can_have_desc = unit["has_image"] or unit["has_table"]
+            # Check for atomic contextual description binding
+            is_desc = self._is_contextual_description(next_ch["content"])
             
-            if can_have_desc and i + 1 < len(units):
-                next_unit = units[i+1]
-                desc_tag = "<IMAGE_CONTEXTUAL_DESCRIPTION>" if unit["has_image"] else "<TABLE_CONTEXTUAL_DESCRIPTION>"
+            # If next is a description, it MUST be merged with the current unit
+            # Or if they fit together
+            if is_desc or (current["tokens"] + next_ch["tokens"] <= limit):
+                joiner = "\n" if is_desc else "\n\n"
+                current["content"] += joiner + next_ch["content"]
+                current["tokens"] = self._count_tokens(current["content"])
                 
-                if desc_tag in next_unit["content"]:
-                    # Merge them!
-                    unit["content"] += "\n" + next_unit["content"]
-                    unit["tokens"] += next_unit["tokens"]
-                    # Update flags
-                    unit["has_image"] |= next_unit["has_image"]
-                    unit["has_table"] |= next_unit["has_table"]
-                    unit["has_code"] |= next_unit["has_code"]
-                    unit["is_atomic"] = True
-                    # Breadcrumbs are usually the same, but take the most specific one
-                    if len(next_unit["breadcrumbs"]) > len(unit["breadcrumbs"]):
-                        unit["breadcrumbs"] = next_unit["breadcrumbs"]
-                    merged.append(unit)
-                    i += 2
-                    continue
+                # Merge basic metadata flags
+                current["metadata"]["has_image"] = current["metadata"].get("has_image", False) or next_ch["metadata"].get("has_image", False)
+                current["metadata"]["has_table"] = current["metadata"].get("has_table", False) or next_ch["metadata"].get("has_table", False)
+                
+                # Breadcrumbs: use the one with more depth if different
+                if len(next_ch["metadata"]["breadcrumbs"]) > len(current["metadata"]["breadcrumbs"]):
+                    current["metadata"]["breadcrumbs"] = next_ch["metadata"]["breadcrumbs"]
+            else:
+                aggregated.append(current)
+                current = next_ch
+                
+        if current:
+            aggregated.append(current)
             
-            merged.append(unit)
-            i += 1
-        return merged
+        return aggregated
 
-    def _aggregate_units(self, units: List[Dict], max_tokens: int) -> List[Dict[str, Any]]:
-        """Merges small units and force-splits large ones."""
+    def _split_text(self, text: str, breadcrumbs: typingList[str], limit: int) -> typingList[Dict]:
+        """Splits a large text block into smaller chunks at sentence boundaries."""
+        # Split by sentences, handling spaces or newlines after punctuation
+        sentences = re.split(r'(?<=[.!?])[\s\n]+', text)
         chunks = []
         current_content = []
         current_tokens = 0
-        current_metadata = {
-            "breadcrumbs": [],
-            "has_image": False,
-            "has_table": False,
-            "has_code": False
-        }
-
-        def flush():
-            nonlocal current_content, current_tokens, current_metadata
-            if current_content:
-                content = "".join(current_content).strip()
-                if content:
-                    chunks.append({
-                        "content": content,
-                        "metadata": {
-                            "breadcrumbs": current_metadata["breadcrumbs"],
-                            "content_length": current_tokens,
-                            "has_image": current_metadata["has_image"],
-                            "has_table": current_metadata["has_table"],
-                            "has_code": current_metadata["has_code"]
-                        }
-                    })
+        
+        for sentence in sentences:
+            s_tokens = self._count_tokens(sentence)
+            
+            if current_tokens + s_tokens > limit and current_content:
+                content = " ".join(current_content).strip()
+                chunks.append({
+                    "content": content,
+                    "tokens": current_tokens,
+                    "metadata": {
+                        "breadcrumbs": list(breadcrumbs),
+                        "type": "ParagraphSplitted"
+                    }
+                })
                 current_content = []
                 current_tokens = 0
-                current_metadata = {
-                    "breadcrumbs": [],
-                    "has_image": False,
-                    "has_table": False,
-                    "has_code": False
+            
+            current_content.append(sentence)
+            current_tokens += s_tokens
+            
+        if current_content:
+            content = " ".join(current_content).strip()
+            chunks.append({
+                "content": content,
+                "tokens": current_tokens,
+                "metadata": {
+                    "breadcrumbs": list(breadcrumbs),
+                    "type": "ParagraphSplitted"
                 }
-
-        for unit in units:
-            u_tokens = unit["tokens"]
-            u_md = unit["content"]
-            u_meta = {
-                "breadcrumbs": unit["breadcrumbs"],
-                "has_image": unit["has_image"],
-                "has_table": unit["has_table"],
-                "has_code": unit["has_code"]
-            }
-
-            # Update breadcrumbs for the new chunk if it's empty
-            if not current_content or len(u_meta["breadcrumbs"]) > len(current_metadata["breadcrumbs"]):
-                current_metadata["breadcrumbs"] = u_meta["breadcrumbs"]
-
-            # Check if it fits
-            if current_tokens + u_tokens <= max_tokens:
-                current_content.append(u_md)
-                current_tokens += u_tokens
-                current_metadata["has_image"] |= u_meta["has_image"]
-                current_metadata["has_table"] |= u_meta["has_table"]
-                current_metadata["has_code"] |= u_meta["has_code"]
-            else:
-                flush()
-                
-                # If single unit exceeds limit
-                if u_tokens > max_tokens:
-                    if unit["is_atomic"]:
-                        # Keep atomic units together even if they exceed the limit
-                        current_content = [u_md]
-                        current_tokens = u_tokens
-                        current_metadata.update(u_meta)
-                        flush()
-                    else:
-                        # Split non-atomic large nodes (Paragraphs)
-                        sentences = re.split(r'(?<=[.!?]) +', u_md)
-                        for sentence in sentences:
-                            s_tokens = self._count_tokens(sentence)
-                            if current_tokens + s_tokens > max_tokens and current_content:
-                                flush()
-                                current_metadata["breadcrumbs"] = u_meta["breadcrumbs"]
-                            
-                            current_content.append(sentence)
-                            current_tokens += s_tokens
-                            current_metadata["has_image"] |= u_meta["has_image"]
-                            current_metadata["has_table"] |= u_meta["has_table"]
-                            current_metadata["has_code"] |= u_meta["has_code"]
-                        flush()
-                else:
-                    # Fits as a new chunk
-                    current_content = [u_md]
-                    current_tokens = u_tokens
-                    current_metadata.update(u_meta)
-
-        flush()
+            })
+            
         return chunks

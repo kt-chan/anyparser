@@ -20,7 +20,8 @@ You are an expert Backend Architect. This project is a FastAPI-based service for
 * **LLM Endpoint**:  scan environment variables (LLM_HOST_PATH, LLM_MODEL_NAME, and LLM_API_KEY) in project root directory .env files.
 * **Local Environment**: This is a Windows VS Code, and you are running in PowerShell, Python 3.10+, python interpreter at @.venv\Scripts\python.exe
 
-### 3. DevOps Practice
+### 3. Development Practice
+* **code execution**: you should always make log output to logs/agent.log for any code execution, such as python.exe
 * **unit test**: unless request specifically to skip `unit test`, you should always write unit test after updates, put unit test code under tests\ folder at project root directory.
 
 ### 4. Project Structure (Modular): 
