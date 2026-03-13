@@ -147,3 +147,27 @@ async def chunk_markdown(request: ChunkRequest):
     except Exception as e:
         logger.error(f"Error chunking markdown: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/md/chunk")
+async def chunk_markdown_file(
+    file: UploadFile = File(...), 
+    chunk_size: int = 2000
+):
+    """
+    Endpoint to chunk a markdown file into semantic parts.
+    Accepts a markdown file upload.
+    Returns a list of semantic chunks (text).
+    """
+    # Validation
+    if not file.filename.endswith(".md") and file.content_type != "text/markdown":
+        logger.warning(f"File {file.filename} may not be a markdown file (content_type: {file.content_type})")
+    
+    logger.info(f"Received markdown file chunking request: {file.filename} with chunk_size={chunk_size}")
+    try:
+        content = await file.read()
+        markdown_text = content.decode("utf-8")
+        chunks = await chunking_service.chunk_markdown(markdown_text, chunk_size)
+        return {"chunks": chunks}
+    except Exception as e:
+        logger.error(f"Error chunking markdown file: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
